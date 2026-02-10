@@ -95,4 +95,7 @@ jobs:
           GH_REPO: Dhruv2mars/mdv
         shell: bash
         run: |
-          gh release upload "${RELEASE_TAG}" dist/* --clobber
+          set -euo pipefail
+          for f in dist/*; do
+            gh release upload --clobber "${RELEASE_TAG}" "$f"
+          done
