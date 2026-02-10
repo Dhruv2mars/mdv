@@ -111,6 +111,9 @@ jobs:
           await git.clone();
 
           const workDir = git.getWorkDir();
+          // Allow pushing branches from the temp clone.
+          const authRemote = `https://x-access-token:${process.env.GH_TOKEN}@github.com/Dhruv2mars/mdv.git`;
+          execSync(`git remote set-url origin "${authRemote}"`, { cwd: workDir });
           const cliPkgPath = path.join(workDir, 'packages/cli/package.json');
           const cliPkg = JSON.parse(fs.readFileSync(cliPkgPath, 'utf8'));
           const packageName = cliPkg.name;
