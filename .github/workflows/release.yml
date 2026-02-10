@@ -64,7 +64,7 @@ jobs:
 
       - name: npmrc (OIDC)
         run: |
-          cat << 'EOF' > "$HOME/.npmrc"
+          cat << 'EOF' > "$NPM_CONFIG_USERCONFIG"
           registry=https://registry.npmjs.org/
           EOF
 
