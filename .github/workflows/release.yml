@@ -7,14 +7,12 @@ on:
 
 concurrency: ${{ github.workflow }}-${{ github.ref }}
 
-permissions:
-  contents: write
-  pull-requests: write
-  id-token: write
-
 jobs:
   version:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -39,22 +37,19 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.AUTOSHIP_GH_TOKEN || secrets.GITHUB_TOKEN }}
 
-  publish:
+  publish_npm:
     runs-on: ubuntu-latest
     needs: [version]
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.AUTOSHIP_GH_TOKEN || secrets.GITHUB_TOKEN }}
 
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-
-      - name: npm (trusted publisher)
-        run: |
-          npm i -g npm@^11.5.1
-          npm -v
+          registry-url: "https://registry.npmjs.org"
 
       - uses: oven-sh/setup-bun@v2
 
@@ -63,7 +58,7 @@ jobs:
 
       - name: Skip if version PR open
         env:
-          GH_TOKEN: ${{ secrets.AUTOSHIP_GH_TOKEN || secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           pr="$(gh pr list --repo "$GITHUB_REPOSITORY" --head "changeset-release/main" --base "main" --state open --json number --jq '.[0].number' || true)"
@@ -72,12 +67,17 @@ jobs:
             exit 0
           fi
 
-      - name: Publish (OIDC)
+      - name: OIDC debug
         run: |
           set -euo pipefail
-          unset NODE_AUTH_TOKEN NPM_TOKEN
-          export NPM_CONFIG_USERCONFIG="$RUNNER_TEMP/mdv.npmrc"
-          printf "registry=https://registry.npmjs.org/\n" > "$NPM_CONFIG_USERCONFIG"
+          echo "node=$(node -v)"
+          echo "npm=$(npm -v)"
+          echo "has_id_token_url=$([ -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ] && echo yes || echo no)"
+          npm config get registry
+
+      - name: Publish (trusted publisher)
+        run: |
+          set -euo pipefail
           local_v="$(node -p "require('./packages/cli/package.json').version")"
           remote_v="$(npm view @dhruv2mars/mdv version 2>/dev/null || true)"
           if [ -n "${remote_v:-}" ] && [ "${remote_v}" = "${local_v}" ]; then
@@ -85,6 +85,16 @@ jobs:
             exit 0
           fi
           (cd packages/cli && npm publish --provenance --access public)
+
+  tag:
+    runs-on: ubuntu-latest
+    needs: [publish_npm]
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Tag (vX.Y.Z)
         run: |
