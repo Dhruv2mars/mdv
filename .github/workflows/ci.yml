@@ -6,26 +6,67 @@ on:
   pull_request:
 
 jobs:
-  rust:
+  rust-quality:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+
       - name: Format
         run: cargo fmt --all -- --check
+
       - name: Lint
         run: cargo clippy --workspace --all-targets -- -D warnings
+
       - name: Test
         run: cargo test --workspace
 
-  bun:
+      - name: Smoke help
+        run: cargo run -p mdv-cli -- --help
+
+      - name: Smoke stream
+        run: printf '# smoke\n' | cargo run -p mdv-cli -- --stream --perf >/dev/null
+
+  rust-coverage:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
-      - name: Validate npm workspace scaffold
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-llvm-cov
+        run: cargo install cargo-llvm-cov --locked
+
+      - name: Coverage
         run: |
-          bun --version
-          test -f package.json
-          test -f packages/cli/package.json
+          mkdir -p coverage
+          cargo llvm-cov --workspace --lcov --output-path coverage/lcov.info
+
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rust-coverage-lcov
+          path: coverage/lcov.info
+
+  package-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install js deps
+        run: bun install --frozen-lockfile
+
+      - name: Build cli binary
+        run: cargo build -p mdv-cli
+
+      - name: Pack npm package
+        run: npm pack --prefix packages/cli
+
+      - name: Launcher smoke
+        run: MDV_BIN=target/debug/mdv-cli node packages/cli/bin/mdv.js --help
