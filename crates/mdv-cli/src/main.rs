@@ -3,10 +3,12 @@ mod stream;
 mod watcher;
 
 use std::fs;
+use std::io::{self, IsTerminal, Read};
 use std::path::PathBuf;
 
 use anyhow::{Result, bail};
 use clap::Parser;
+use mdv_core::render_preview_lines;
 
 #[derive(Debug, Parser)]
 #[command(name = "mdv", about = "Terminal markdown visualizer")]
@@ -37,6 +39,23 @@ fn main() -> Result<()> {
     if cli.stream {
         if cli.path.is_some() {
             bail!("path arg not allowed with --stream");
+        }
+
+        if !io::stdout().is_terminal() {
+            let mut buf = String::new();
+            io::stdin().read_to_string(&mut buf)?;
+            let width = std::env::var("COLUMNS")
+                .ok()
+                .and_then(|v| v.parse::<u16>().ok())
+                .unwrap_or(80);
+            let lines = render_preview_lines(&buf, width);
+            for (i, line) in lines.iter().enumerate() {
+                if i > 0 {
+                    println!();
+                }
+                print!("{line}");
+            }
+            return Ok(());
         }
 
         let mut app = app::App::new_stream(cli.perf)?;
