@@ -37,18 +37,22 @@ jobs:
             platform: linux
             arch: x64
             ext: ''
+            target: ''
           - os: windows-latest
             platform: win32
             arch: x64
             ext: '.exe'
-          - os: macos-13
-            platform: darwin
-            arch: x64
-            ext: ''
+            target: ''
           - os: macos-14
             platform: darwin
             arch: arm64
             ext: ''
+            target: ''
+          - os: macos-14
+            platform: darwin
+            arch: x64
+            ext: ''
+            target: x86_64-apple-darwin
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -58,13 +62,24 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Build
-        run: cargo build --release -p mdv-cli
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -n "${{ matrix.target }}" ]; then
+            rustup target add "${{ matrix.target }}"
+            cargo build --release -p mdv-cli --target "${{ matrix.target }}"
+          else
+            cargo build --release -p mdv-cli
+          fi
 
       - name: Package
         shell: bash
         run: |
+          set -euo pipefail
           mkdir -p dist
-          BIN="target/release/mdv-cli${{ matrix.ext }}"
+          BIN_DIR="target"
+          if [ -n "${{ matrix.target }}" ]; then BIN_DIR="target/${{ matrix.target }}"; fi
+          BIN="${BIN_DIR}/release/mdv-cli${{ matrix.ext }}"
           OUT="dist/mdv-${{ matrix.platform }}-${{ matrix.arch }}${{ matrix.ext }}"
           cp "$BIN" "$OUT"
 
