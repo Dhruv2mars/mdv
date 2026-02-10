@@ -7,14 +7,16 @@
   ],
   "scripts": {
     "cli": "bun --cwd packages/cli run mdv",
-    "test": "cargo test --workspace",
-    "lint": "cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings",
-    "coverage": "mkdir -p coverage && cargo llvm-cov --workspace --lcov --output-path coverage/lcov.info",
+    "build": "turbo run build",
+    "test": "turbo run test",
+    "lint": "turbo run lint",
+    "coverage": "turbo run coverage",
     "release:version": "bunx changeset version",
     "release:publish": "bunx changeset publish",
     "release:autoship": "npx autoship mdv -t patch -y"
   },
   "devDependencies": {
-    "@changesets/cli": "^2.29.7"
+    "@changesets/cli": "^2.29.7",
+    "turbo": "^2.5.6"
   }
 }

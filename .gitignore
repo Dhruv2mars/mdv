@@ -11,6 +11,7 @@ yarn-error.log*
 pnpm-debug.log*
 .npm/
 .bun/
+.turbo/
 
 # Rust
 target/
@@ -32,4 +33,3 @@ out/
 .vscode/
 *.swp
 *.swo
-

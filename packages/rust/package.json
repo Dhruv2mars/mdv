@@ -1,0 +1,12 @@
+{
+  "name": "@mdv/rust",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "cargo build --manifest-path ../../Cargo.toml --workspace",
+    "test": "cargo test --manifest-path ../../Cargo.toml --workspace",
+    "lint": "cargo fmt --manifest-path ../../Cargo.toml --all -- --check && cargo clippy --manifest-path ../../Cargo.toml --workspace --all-targets -- -D warnings",
+    "coverage": "node -e \"require('fs').mkdirSync('../../coverage',{recursive:true})\" && cargo llvm-cov --manifest-path ../../Cargo.toml --workspace --lcov --output-path ../../coverage/lcov.info"
+  }
+}
+
