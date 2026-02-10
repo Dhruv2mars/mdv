@@ -1,0 +1,24 @@
+{
+  "$schema": "https://turbo.build/schema.json",
+  "ui": "tui",
+  "tasks": {
+    "build": {
+      "dependsOn": ["^build"],
+      "outputs": []
+    },
+    "lint": {
+      "dependsOn": ["^lint"],
+      "outputs": []
+    },
+    "test": {
+      "dependsOn": ["^build", "build", "^test"],
+      "outputs": []
+    },
+    "coverage": {
+      "dependsOn": ["^build", "build"],
+      "outputs": ["coverage/**"],
+      "cache": false
+    }
+  }
+}
+

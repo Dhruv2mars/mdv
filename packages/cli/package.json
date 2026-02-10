@@ -12,7 +12,9 @@
   "scripts": {
     "mdv": "node bin/mdv.js",
     "postinstall": "node bin/install.js",
-    "selftest": "node bin/selftest.js"
+    "selftest": "node bin/selftest.js",
+    "lint": "node --check bin/mdv.js && node --check bin/install.js && node --check bin/selftest.js",
+    "test": "node scripts/test.js"
   },
   "keywords": [
     "markdown",
@@ -33,5 +35,8 @@
     "node": ">=18"
   },
   "preferGlobal": true,
-  "license": "MIT"
+  "license": "MIT",
+  "devDependencies": {
+    "@mdv/rust": "workspace:*"
+  }
 }
