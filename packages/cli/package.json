@@ -1,7 +1,7 @@
 {
   "name": "@dhruv2mars/mdv",
   "version": "0.0.2",
-  "description": "Terminal markdown visualizer",
+  "description": "Terminal-first markdown visualizer/editor",
   "type": "module",
   "bin": {
     "mdv": "bin/mdv.js"
@@ -12,5 +12,24 @@
   "scripts": {
     "mdv": "node bin/mdv.js"
   },
+  "keywords": [
+    "markdown",
+    "terminal",
+    "tui",
+    "rust",
+    "cli"
+  ],
+  "homepage": "https://github.com/Dhruv2mars/mdv#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Dhruv2mars/mdv.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Dhruv2mars/mdv/issues"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "preferGlobal": true,
   "license": "MIT"
 }
