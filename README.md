@@ -15,9 +15,8 @@ mdv README.md
 ```
 
 First run behavior:
-- installer downloads/builds `mdv-cli` into `~/.mdv/bin/mdv-cli`
-- rust toolchain (`cargo`) required on machine
-- installer forces cargo git CLI fetch to avoid libgit2 auth failures
+- postinstall downloads prebuilt `mdv` into `~/.mdv/bin/mdv`
+- `MDV_SKIP_DOWNLOAD=1` skips download
 
 Overrides:
 - `MDV_BIN`: force exact binary path
@@ -87,6 +86,7 @@ Release flow:
 - changesets + autoship
 - autoship entry: `bun run release:autoship`
 - CI release workflow publishes npm package from version PR merges (OIDC trusted publishing)
+- binary assets built by `binaries` workflow on tag `vX.Y.Z`
 
 One-time npm setup:
 - In npm package settings for `@dhruv2mars/mdv`, add a Trusted Publisher for this GitHub repo + `release` workflow on `main`.

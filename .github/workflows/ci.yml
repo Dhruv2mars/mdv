@@ -60,7 +60,7 @@ jobs:
           node-version: 20
 
       - name: Install js deps
-        run: bun install --frozen-lockfile
+        run: MDV_SKIP_DOWNLOAD=1 bun install --frozen-lockfile
 
       - name: Build cli binary
         run: cargo build -p mdv-cli
