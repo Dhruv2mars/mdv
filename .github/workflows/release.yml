@@ -18,7 +18,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          token: ${{ secrets.AUTOSHIP_GH_TOKEN || github.token }}
+          token: ${{ secrets.AUTOSHIP_GH_TOKEN || secrets.GITHUB_TOKEN }}
 
       - uses: actions/setup-node@v4
         with:
@@ -37,7 +37,7 @@ jobs:
           title: "chore: version packages"
           createGithubReleases: false
         env:
-          GITHUB_TOKEN: ${{ secrets.AUTOSHIP_GH_TOKEN || github.token }}
+          GITHUB_TOKEN: ${{ secrets.AUTOSHIP_GH_TOKEN || secrets.GITHUB_TOKEN }}
 
   publish:
     runs-on: ubuntu-latest
@@ -45,7 +45,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          token: ${{ secrets.AUTOSHIP_GH_TOKEN || github.token }}
+          token: ${{ secrets.AUTOSHIP_GH_TOKEN || secrets.GITHUB_TOKEN }}
 
       - uses: actions/setup-node@v4
         with:
@@ -65,7 +65,7 @@ jobs:
 
       - name: Skip if version PR open
         env:
-          GH_TOKEN: ${{ secrets.AUTOSHIP_GH_TOKEN || github.token }}
+          GH_TOKEN: ${{ secrets.AUTOSHIP_GH_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           pr="$(gh pr list --repo "$GITHUB_REPOSITORY" --head "changeset-release/main" --base "main" --state open --json number --jq '.[0].number' || true)"
