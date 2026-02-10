@@ -56,6 +56,8 @@ jobs:
         with:
           node-version: 24
           registry-url: "https://registry.npmjs.org"
+          # Prevent setup-node defaulting to GITHUB_TOKEN for npm auth.
+          token: ""
 
       - uses: oven-sh/setup-bun@v2
 
@@ -83,9 +85,14 @@ jobs:
           npm config get registry
 
       - name: Publish (trusted publisher)
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           set -euo pipefail
-          unset NODE_AUTH_TOKEN NPM_TOKEN
+          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
+            echo "missing: secrets.NPM_TOKEN"
+            exit 1
+          fi
           local_v="$(node -p "require('./packages/cli/package.json').version")"
           remote_v="$(npm view @dhruv2mars/mdv version 2>/dev/null || true)"
           if [ -n "${remote_v:-}" ] && [ "${remote_v}" = "${local_v}" ]; then
