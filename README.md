@@ -18,6 +18,16 @@ Or via npm workspace wrapper:
 bun --cwd packages/cli run mdv -- README.md
 ```
 
+Global install:
+```bash
+npm i -g @dhruv2mars/mdv
+mdv README.md
+```
+Notes:
+- first run installs rust binary to `~/.mdv/bin/mdv-cli`
+- requires rust toolchain (`cargo`)
+- optional overrides: `MDV_BIN`, `MDV_INSTALL_ROOT`
+
 Flags:
 - `--readonly`
 - `--no-watch`
