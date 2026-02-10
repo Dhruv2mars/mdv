@@ -1,26 +1,43 @@
 #!/usr/bin/env node
-import { spawnSync } from 'node:child_process';
-import { dirname, resolve } from 'node:path';
 import { existsSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
 
+const REPO = 'https://github.com/Dhruv2mars/mdv';
 const args = process.argv.slice(2);
-
 const envBin = process.env.MDV_BIN;
-if (envBin) {
-  run(envBin, args);
+
+if (envBin) run(envBin, args);
+
+const installRoot = process.env.MDV_INSTALL_ROOT || join(homedir(), '.mdv');
+const binName = process.platform === 'win32' ? 'mdv-cli.exe' : 'mdv-cli';
+const installedBin = join(installRoot, 'bin', binName);
+
+if (!existsSync(installedBin)) {
+  ensureCargo();
+  console.error('mdv: installing rust binary (first run)...');
+  const install = spawnSync(
+    'cargo',
+    ['install', 'mdv-cli', '--git', REPO, '--locked', '--root', installRoot],
+    { stdio: 'inherit' }
+  );
+
+  if (install.status !== 0 || !existsSync(installedBin)) {
+    console.error('mdv: install failed');
+    process.exit(1);
+  }
 }
 
-const here = dirname(fileURLToPath(import.meta.url));
-const localDevBin = resolve(here, '../../../target/debug/mdv-cli');
-if (existsSync(localDevBin)) {
-  run(localDevBin, args);
-}
+run(installedBin, args);
 
-const fallback = spawnSync('cargo', ['run', '-p', 'mdv-cli', '--', ...args], {
-  stdio: 'inherit'
-});
-process.exit(fallback.status ?? 1);
+function ensureCargo() {
+  const probe = spawnSync('cargo', ['--version'], { stdio: 'ignore' });
+  if (probe.status === 0) return;
+
+  console.error('mdv: rust toolchain not found. install rustup/cargo first.');
+  process.exit(1);
+}
 
 function run(bin, binArgs) {
   const res = spawnSync(bin, binArgs, { stdio: 'inherit' });
