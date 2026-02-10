@@ -36,12 +36,6 @@ tail -f notes.md | mdv --stream
 - `--stream` read markdown from stdin (no `PATH` arg)
 - `--perf` show perf info in status line
 
-## Env
-
-- `MDV_SKIP_DOWNLOAD=1` skip binary download (npm postinstall)
-- `MDV_BIN=/path/to/mdv` use exact binary
-- `MDV_INSTALL_ROOT=/some/dir` install root (default `~/.mdv`)
-
 ## Dev/Contrib
 
 See `CONTRIBUTING.md`.
