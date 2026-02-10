@@ -91,7 +91,7 @@ jobs:
         run: |
           v="$(node -p "require('./packages/cli/package.json').version")"
           tag="v${v}"
-          if git ls-remote --tags origin "${tag}" | rg -q .; then
+          if git ls-remote --tags origin "${tag}" | grep -q .; then
             echo "skip: tag exists (${tag})"
             exit 0
           fi
