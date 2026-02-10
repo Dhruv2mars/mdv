@@ -476,7 +476,7 @@ dependencies = [
 
 [[package]]
 name = "mdv-cli"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "anyhow",
  "clap",
@@ -488,7 +488,7 @@ dependencies = [
 
 [[package]]
 name = "mdv-core"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "pulldown-cmark",
  "thiserror",
