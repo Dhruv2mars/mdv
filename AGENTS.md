@@ -28,6 +28,7 @@ Core diff: very fast startup/render/scroll, in-app edit, realtime file sync.
 - Repo release flow must use Changesets.
 - Autoship already configured for this repo.
 - Requirements at release time: `gh` auth. `AI_GATEWAY_API_KEY` recommended (else generic msg fallback).
+- For full autoship flow (PR checks run): set Actions secret `AUTOSHIP_GH_TOKEN` (PAT). Else autoship runs lint/test inside its own workflow.
 - Autoship run (manual): `bun run release:autoship`.
 - Autoship run (CI): `.github/workflows/autoship.yml` (push main + workflow_dispatch).
 - Expected flow (per autoship): changeset PR -> wait CI -> merge -> version packages PR -> merge -> publish -> tag -> binaries.
