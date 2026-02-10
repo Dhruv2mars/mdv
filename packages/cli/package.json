@@ -1,0 +1,16 @@
+{
+  "name": "@dhruv2mars/mdv",
+  "version": "0.1.0",
+  "description": "Terminal markdown visualizer",
+  "type": "module",
+  "bin": {
+    "mdv": "bin/mdv.js"
+  },
+  "files": [
+    "bin"
+  ],
+  "scripts": {
+    "mdv": "node bin/mdv.js"
+  },
+  "license": "MIT"
+}

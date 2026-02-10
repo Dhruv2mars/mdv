@@ -1,0 +1,26 @@
+# mdv
+
+Terminal-first markdown visualizer/editor in Rust.
+
+## Current scope
+- Split TUI: editor + preview
+- Live file-watch updates
+- External-change conflict actions: keep/reload/merge
+- npm package scaffold: `@dhruv2mars/mdv`
+
+## Run (dev)
+```bash
+cargo run -p mdv-cli -- README.md
+```
+
+Or via npm workspace wrapper:
+```bash
+bun --cwd packages/cli run mdv -- README.md
+```
+
+## Keys
+- `Ctrl+Q` quit
+- `Ctrl+S` save
+- `Ctrl+R` reload external
+- `Ctrl+K` keep local
+- `Ctrl+M` merge conflict markers

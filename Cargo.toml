@@ -1,0 +1,19 @@
+[workspace]
+members = ["crates/mdv-core", "crates/mdv-cli"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+authors = ["Dhruv Mars"]
+repository = "https://github.com/Dhruv2mars/mdv"
+
+[workspace.dependencies]
+anyhow = "1.0"
+clap = { version = "4.5", features = ["derive"] }
+crossterm = "0.29"
+notify = "8.2"
+pulldown-cmark = "0.13"
+ratatui = "0.29"
+thiserror = "2.0"
