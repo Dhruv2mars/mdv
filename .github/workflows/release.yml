@@ -63,6 +63,13 @@ jobs:
           bun run release:publish
 
       - name: dist-tag early
+        env:
+          NPM_DIST_TAG_TOKEN: ${{ secrets.NPM_DIST_TAG_TOKEN }}
         run: |
           v="$(node -p "require('./packages/cli/package.json').version")"
+          if [ -z "${NPM_DIST_TAG_TOKEN:-}" ]; then
+            echo "skip: missing NPM_DIST_TAG_TOKEN"
+            exit 0
+          fi
+          echo "//registry.npmjs.org/:_authToken=${NPM_DIST_TAG_TOKEN}" >> "$HOME/.npmrc"
           npm dist-tag add "@dhruv2mars/mdv@${v}" early
