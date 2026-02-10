@@ -1,0 +1,80 @@
+name: binaries
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: git tag (ex: v0.0.2)
+        required: true
+        type: string
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  create-release:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - name: Tag
+        id: tag
+        run: |
+          if [ -n "${{ inputs.tag }}" ]; then echo "tag=${{ inputs.tag }}" >> $GITHUB_OUTPUT; else echo "tag=${GITHUB_REF_NAME}" >> $GITHUB_OUTPUT; fi
+      - name: Create release (idempotent)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release view "${{ steps.tag.outputs.tag }}" >/dev/null 2>&1 || gh release create "${{ steps.tag.outputs.tag }}" --title "${{ steps.tag.outputs.tag }}" --notes ""
+
+  build:
+    needs: create-release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux
+            arch: x64
+          - os: windows-latest
+            platform: win32
+            arch: x64
+            ext: .exe
+          - os: macos-13
+            platform: darwin
+            arch: x64
+          - os: macos-14
+            platform: darwin
+            arch: arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --release -p mdv-cli
+
+      - name: Package
+        shell: bash
+        run: |
+          mkdir -p dist
+          BIN="target/release/mdv-cli${{ matrix.ext }}"
+          OUT="dist/mdv-${{ matrix.platform }}-${{ matrix.arch }}${{ matrix.ext }}"
+          cp "$BIN" "$OUT"
+
+      - name: Checksums
+        shell: bash
+        run: |
+          cd dist
+          if command -v shasum >/dev/null 2>&1; then shasum -a 256 * > checksums-${{ matrix.platform }}-${{ matrix.arch }}.txt; else sha256sum * > checksums-${{ matrix.platform }}-${{ matrix.arch }}.txt; fi
+
+      - name: Upload to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          gh release upload "${{ needs.create-release.outputs.tag }}" dist/* --clobber

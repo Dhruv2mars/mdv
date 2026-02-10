@@ -10,7 +10,9 @@
     "bin"
   ],
   "scripts": {
-    "mdv": "node bin/mdv.js"
+    "mdv": "node bin/mdv.js",
+    "postinstall": "node bin/install.js",
+    "selftest": "node bin/selftest.js"
   },
   "keywords": [
     "markdown",
