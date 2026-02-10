@@ -1,6 +1,6 @@
 name: binaries
 
-on:
+"on":
   workflow_dispatch:
     inputs:
       tag:
