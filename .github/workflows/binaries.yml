@@ -15,6 +15,7 @@ jobs:
       - name: Create release (idempotent)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: Dhruv2mars/mdv
         run: |
           gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1 || gh release create "${GITHUB_REF_NAME}" --title "${GITHUB_REF_NAME}" --notes ""
 
@@ -66,6 +67,7 @@ jobs:
       - name: Upload
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: Dhruv2mars/mdv
         shell: bash
         run: |
           gh release upload "${GITHUB_REF_NAME}" dist/* --clobber
