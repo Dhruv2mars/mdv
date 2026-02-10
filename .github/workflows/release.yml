@@ -37,8 +37,8 @@ jobs:
         with:
           version: bun run release:version
           publish: bun run release:publish
-          commit: chore: version packages
-          title: chore: version packages
+          commit: "chore: version packages"
+          title: "chore: version packages"
         env:
           GITHUB_TOKEN: ${{ github.token }}
           NPM_CONFIG_PROVENANCE: "true"
