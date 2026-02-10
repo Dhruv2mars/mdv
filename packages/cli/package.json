@@ -1,6 +1,6 @@
 {
   "name": "@dhruv2mars/mdv",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "description": "Terminal-first markdown visualizer/editor",
   "type": "module",
   "bin": {
