@@ -26,7 +26,8 @@
   "homepage": "https://github.com/Dhruv2mars/mdv#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Dhruv2mars/mdv.git"
+    "url": "git+https://github.com/Dhruv2mars/mdv.git",
+    "directory": "packages/cli"
   },
   "bugs": {
     "url": "https://github.com/Dhruv2mars/mdv/issues"
