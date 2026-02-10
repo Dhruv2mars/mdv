@@ -1,6 +1,6 @@
 {
   "name": "@dhruv2mars/mdv",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "Terminal markdown visualizer",
   "type": "module",
   "bin": {

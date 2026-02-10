@@ -26,6 +26,7 @@ mdv README.md
 Notes:
 - first run installs rust binary to `~/.mdv/bin/mdv-cli`
 - requires rust toolchain (`cargo`)
+- installer forces `cargo` git CLI fetch to avoid libgit2 auth issues
 - optional overrides: `MDV_BIN`, `MDV_INSTALL_ROOT`
 
 Flags:
