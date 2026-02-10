@@ -61,3 +61,8 @@ jobs:
         run: |
           unset NODE_AUTH_TOKEN NPM_TOKEN
           bun run release:publish
+
+      - name: dist-tag early
+        run: |
+          v="$(node -p "require('./packages/cli/package.json').version")"
+          npm dist-tag add "@dhruv2mars/mdv@${v}" early
