@@ -87,14 +87,13 @@ jobs:
           unset NODE_AUTH_TOKEN NPM_TOKEN
           bun run release:publish
 
-      - name: dist-tag early
-        env:
-          NPM_DIST_TAG_TOKEN: ${{ secrets.NPM_DIST_TAG_TOKEN }}
+      - name: Tag (vX.Y.Z)
         run: |
           v="$(node -p "require('./packages/cli/package.json').version")"
-          if [ -z "${NPM_DIST_TAG_TOKEN:-}" ]; then
-            echo "skip: missing NPM_DIST_TAG_TOKEN"
+          tag="v${v}"
+          if git ls-remote --tags origin "${tag}" | rg -q .; then
+            echo "skip: tag exists (${tag})"
             exit 0
           fi
-          echo "//registry.npmjs.org/:_authToken=${NPM_DIST_TAG_TOKEN}" >> "$HOME/.npmrc"
-          npm dist-tag add "@dhruv2mars/mdv@${v}" early
+          git tag "${tag}"
+          git push origin "${tag}"
