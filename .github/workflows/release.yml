@@ -33,20 +33,9 @@ jobs:
           version: bun run release:version
           commit: "chore: version packages"
           title: "chore: version packages"
+          createGithubReleases: false
         env:
           GITHUB_TOKEN: ${{ github.token }}
-
-      - name: Auto-merge version PR
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          pr="$(gh pr list --repo "$GITHUB_REPOSITORY" --head "changeset-release/main" --base "main" --state open --json number --jq '.[0].number' || true)"
-          if [ -z "${pr:-}" ]; then
-            echo "no version pr"
-            exit 0
-          fi
-          gh pr merge "$pr" --merge --auto
 
   publish:
     runs-on: ubuntu-latest
@@ -57,11 +46,18 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+          registry-url: https://registry.npmjs.org
 
       - uses: oven-sh/setup-bun@v2
 
       - name: Install deps
         run: MDV_SKIP_DOWNLOAD=1 bun install --frozen-lockfile
+
+      - name: npmrc (OIDC)
+        run: |
+          cat << 'EOF' > "$HOME/.npmrc"
+          registry=https://registry.npmjs.org/
+          EOF
 
       - name: Skip if version PR open
         env:
@@ -74,13 +70,7 @@ jobs:
             exit 0
           fi
 
-      - name: npmrc (OIDC)
-        run: |
-          cat << 'EOF' > "$HOME/.npmrc"
-          registry=https://registry.npmjs.org/
-          EOF
-
-      - name: Publish (OIDC, no tokens)
+      - name: Publish (OIDC)
         env:
           NPM_CONFIG_PROVENANCE: "true"
         run: |
@@ -89,6 +79,7 @@ jobs:
 
       - name: Tag (vX.Y.Z)
         run: |
+          set -euo pipefail
           v="$(node -p "require('./packages/cli/package.json').version")"
           tag="v${v}"
           if git ls-remote --tags origin "${tag}" | grep -q .; then

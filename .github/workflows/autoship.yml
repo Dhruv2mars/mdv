@@ -1,0 +1,167 @@
+name: autoship
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      type:
+        description: "patch|minor|major (blank = AI)"
+        required: false
+        default: ""
+
+concurrency: ${{ github.workflow }}-${{ github.ref }}
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: read
+
+jobs:
+  autoship:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Skip (no-op cases)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          msg="$(git log -1 --pretty=%B)"
+          if echo "$msg" | grep -Eq '^chore: version packages|^chore: add (patch|minor|major) changeset for release|^chore: (patch|minor|major) release -'; then
+            echo "skip: release commit"
+            exit 0
+          fi
+
+          if ls .changeset/*.md 2>/dev/null | grep -vE '/README\.md$' | grep -q .; then
+            echo "skip: changesets exist"
+            exit 0
+          fi
+
+          if gh pr list --repo "$GITHUB_REPOSITORY" --state open --json title --jq '.[].title' | grep -q 'chore: .* release -'; then
+            echo "skip: autoship release pr open"
+            exit 0
+          fi
+
+          if gh pr list --repo "$GITHUB_REPOSITORY" --state open --head "changeset-release/main" --json number --jq '.[0].number' | grep -q .; then
+            echo "skip: version pr open"
+            exit 0
+          fi
+
+          latest="$(git tag --list 'v*' --sort=-version:refname | head -n1 || true)"
+          if [ -n "${latest:-}" ] && [ "$(git rev-list --count "${latest}..HEAD")" = "0" ]; then
+            echo "skip: no commits since ${latest}"
+            exit 0
+          fi
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install autoship
+        run: npm i -g autoship@0.1.0
+
+      - name: autoship config
+        run: |
+          mkdir -p "$HOME/.autoship"
+          cat > "$HOME/.autoship/config.json" <<'EOF'
+          {
+            "repos": {
+              "mdv": {
+                "owner": "Dhruv2mars",
+                "repo": "mdv",
+                "baseBranch": "main",
+                "cloneUrl": "https://github.com/Dhruv2mars/mdv.git"
+              }
+            }
+          }
+          EOF
+
+      - name: Compute type+message (autoship AI)
+        id: ai
+        env:
+          AI_GATEWAY_API_KEY: ${{ secrets.AI_GATEWAY_API_KEY }}
+          INPUT_TYPE: ${{ inputs.type }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { execSync } from 'node:child_process';
+          import fs from 'node:fs';
+          import path from 'node:path';
+          const npmRoot = execSync('npm root -g', { encoding: 'utf8' }).trim();
+          const gitMod = await import(`file://${path.join(npmRoot, 'autoship/dist/git.js')}`);
+          const aiMod = await import(`file://${path.join(npmRoot, 'autoship/dist/ai.js')}`);
+          const { GitOperations } = gitMod;
+          const { generateChangesetMessage, suggestReleaseType } = aiMod;
+          const out = process.env.GITHUB_OUTPUT;
+
+          const cfg = {
+            owner: 'Dhruv2mars',
+            repo: 'mdv',
+            baseBranch: 'main',
+            cloneUrl: 'https://github.com/Dhruv2mars/mdv.git',
+          };
+
+          const git = new GitOperations(cfg);
+          await git.clone();
+
+          const packageName = await git.getPackageName();
+          const latestTag = await git.getLatestVersionTag();
+
+          let ctx = {
+            commits: [],
+            diff: '',
+            filesChanged: [],
+            insertions: 0,
+            deletions: 0,
+            previousVersion: latestTag ?? 'unknown',
+          };
+
+          if (latestTag) {
+            const [commits, diffSummary, diff] = await Promise.all([
+              git.getCommitsSinceTag(latestTag),
+              git.getDiffSummary(latestTag),
+              git.getFullDiffSinceTag(latestTag),
+            ]);
+            ctx = {
+              commits,
+              diff,
+              filesChanged: diffSummary.files,
+              insertions: diffSummary.insertions,
+              deletions: diffSummary.deletions,
+              previousVersion: latestTag,
+            };
+          } else {
+            ctx.commits = await git.getRecentCommits(15);
+          }
+
+          let type = (process.env.INPUT_TYPE || '').trim();
+          if (!type) {
+            type = await suggestReleaseType(ctx);
+          }
+          if (!['patch', 'minor', 'major'].includes(type)) type = 'patch';
+
+          let message = '';
+          try {
+            message = await generateChangesetMessage(packageName, type, ctx);
+          } catch {
+            message = `Release ${type}`;
+          }
+          message = String(message).replace(/\s+/g, ' ').trim();
+          if (!message) message = `Release ${type}`;
+
+          fs.appendFileSync(out, `type=${type}\n`);
+          fs.appendFileSync(out, `message=${message}\n`);
+
+          await git.cleanup();
+          NODE
+
+      - name: Run autoship
+        env:
+          AI_GATEWAY_API_KEY: ${{ secrets.AI_GATEWAY_API_KEY }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          autoship mdv -t "${{ steps.ai.outputs.type }}" -m "${{ steps.ai.outputs.message }}" -y
