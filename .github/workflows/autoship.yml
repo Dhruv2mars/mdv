@@ -28,7 +28,7 @@ jobs:
       - name: Skip (no-op cases)
         id: gate
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.AUTOSHIP_GH_TOKEN || github.token }}
         run: |
           set -euo pipefail
           run=1
@@ -67,6 +67,15 @@ jobs:
         with:
           node-version: 20
 
+      - uses: oven-sh/setup-bun@v2
+        if: steps.gate.outputs.run == '1' && secrets.AUTOSHIP_GH_TOKEN == ''
+
+      - uses: dtolnay/rust-toolchain@stable
+        if: steps.gate.outputs.run == '1' && secrets.AUTOSHIP_GH_TOKEN == ''
+
+      - uses: Swatinem/rust-cache@v2
+        if: steps.gate.outputs.run == '1' && secrets.AUTOSHIP_GH_TOKEN == ''
+
       - name: Install autoship
         if: steps.gate.outputs.run == '1'
         run: npm i -g autoship@0.1.0
@@ -82,7 +91,8 @@ jobs:
         env:
           AI_GATEWAY_API_KEY: ${{ secrets.AI_GATEWAY_API_KEY || vars.AI_GATEWAY_API_KEY }}
           INPUT_TYPE: ${{ inputs.type }}
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.AUTOSHIP_GH_TOKEN || github.token }}
+          HAS_AUTOSHIP_PAT: ${{ secrets.AUTOSHIP_GH_TOKEN != '' }}
         run: |
           node --input-type=module <<'NODE'
           import { execSync } from 'node:child_process';
@@ -171,13 +181,28 @@ jobs:
           const prBody = `## Release Changeset\n\n**Type:** ${type}\n\n**Changes:**\n${message}\n\n---\n*This PR was created automatically by autoship*`;
           const pr = await github.createPullRequest(branchName, prTitle, prBody);
 
-          const prChecks = await github.waitForChecks(pr.number);
-          if (!prChecks.success) throw new Error('changeset PR checks failed');
+          // PR workflows don't run when PR is created by GITHUB_TOKEN.
+          // If no PAT configured, run checks locally in the temp clone.
+          const hasPat = String(process.env.HAS_AUTOSHIP_PAT || '') === 'true';
+          if (hasPat) {
+            const prChecks = await github.waitForChecks(pr.number);
+            if (!prChecks.success) throw new Error('changeset PR checks failed');
+          } else {
+            execSync('bun install --frozen-lockfile', {
+              cwd: workDir,
+              stdio: 'inherit',
+              env: { ...process.env, MDV_SKIP_DOWNLOAD: '1' },
+            });
+            execSync('bun run lint', { cwd: workDir, stdio: 'inherit' });
+            execSync('bun run test', { cwd: workDir, stdio: 'inherit' });
+          }
           await github.mergePullRequest(pr.number, 'squash');
 
           const versionPr = await github.waitForVersionPackagesPR();
-          const vChecks = await github.waitForChecks(versionPr.number);
-          if (!vChecks.success) throw new Error('version PR checks failed');
+          if (hasPat) {
+            const vChecks = await github.waitForChecks(versionPr.number);
+            if (!vChecks.success) throw new Error('version PR checks failed');
+          }
           await github.mergePullRequest(versionPr.number, 'squash');
 
           await git.cleanup();
