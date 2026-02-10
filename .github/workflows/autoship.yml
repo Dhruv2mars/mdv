@@ -40,6 +40,14 @@ jobs:
             run=0
           fi
 
+          cur="$(python3 -c 'import json;print(json.load(open("packages/cli/package.json"))["version"])' 2>/dev/null || true)"
+          latest="$(git tag --list 'v*' --sort=-version:refname | head -n1 || true)"
+          latest_ver="${latest#v}"
+          if [ -n "${cur:-}" ] && [ -n "${latest_ver:-}" ] && [ "${cur}" != "${latest_ver}" ]; then
+            echo "skip: pending publish (${latest} -> v${cur})"
+            run=0
+          fi
+
           files="$(git diff-tree --no-commit-id --name-only -r HEAD || true)"
           if echo "$files" | grep -Eq '^\.changeset/|^packages/cli/package\.json$|^CHANGELOG\.md$'; then
             echo "skip: release files touched"
@@ -61,7 +69,6 @@ jobs:
             run=0
           fi
 
-          latest="$(git tag --list 'v*' --sort=-version:refname | head -n1 || true)"
           if [ -n "${latest:-}" ] && [ "$(git rev-list --count "${latest}..HEAD")" = "0" ]; then
             echo "skip: no commits since ${latest}"
             run=0
