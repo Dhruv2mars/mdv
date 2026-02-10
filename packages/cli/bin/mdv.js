@@ -4,7 +4,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
-const REPO = 'https://github.com/Dhruv2mars/mdv';
+const REPO = 'https://github.com/Dhruv2mars/mdv.git';
 const args = process.argv.slice(2);
 const envBin = process.env.MDV_BIN;
 
@@ -19,8 +19,21 @@ if (!existsSync(installedBin)) {
   console.error('mdv: installing rust binary (first run)...');
   const install = spawnSync(
     'cargo',
-    ['install', 'mdv-cli', '--git', REPO, '--locked', '--root', installRoot],
-    { stdio: 'inherit' }
+    [
+      'install',
+      'mdv-cli',
+      '--git',
+      REPO,
+      '--locked',
+      '--root',
+      installRoot,
+      '--config',
+      'net.git-fetch-with-cli=true'
+    ],
+    {
+      stdio: 'inherit',
+      env: { ...process.env, CARGO_NET_GIT_FETCH_WITH_CLI: 'true' }
+    }
   );
 
   if (install.status !== 0 || !existsSync(installedBin)) {
