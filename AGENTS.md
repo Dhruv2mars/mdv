@@ -31,6 +31,7 @@ Core diff: very fast startup/render/scroll, in-app edit, realtime file sync.
 - Autoship run (manual): `bun run release:autoship`.
 - Autoship run (CI): `.github/workflows/autoship.yml` (push main + workflow_dispatch).
 - Expected flow (per autoship): changeset PR -> wait CI -> merge -> version packages PR -> merge -> publish -> tag -> binaries.
+- Note: autoship upstream assumes single-package repo; our workflow targets `packages/cli` package for changeset name.
 
 ## References
 - Autoship repo: `https://github.com/vercel-labs/autoship`.

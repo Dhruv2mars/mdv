@@ -13,7 +13,7 @@
     "coverage": "turbo run coverage",
     "release:version": "bunx changeset version",
     "release:publish": "bunx changeset publish",
-    "release:autoship": "npx autoship mdv -t patch -y"
+    "release:autoship": "gh workflow run autoship.yml -f type=patch"
   },
   "devDependencies": {
     "@changesets/cli": "^2.29.7",

@@ -26,77 +26,77 @@ jobs:
           fetch-depth: 0
 
       - name: Skip (no-op cases)
+        id: gate
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          run=1
 
           msg="$(git log -1 --pretty=%B)"
           if echo "$msg" | grep -Eq '^chore: version packages|^chore: add (patch|minor|major) changeset for release|^chore: (patch|minor|major) release -'; then
             echo "skip: release commit"
-            exit 0
+            run=0
           fi
 
           if ls .changeset/*.md 2>/dev/null | grep -vE '/README\.md$' | grep -q .; then
             echo "skip: changesets exist"
-            exit 0
+            run=0
           fi
 
           if gh pr list --repo "$GITHUB_REPOSITORY" --state open --json title --jq '.[].title' | grep -q 'chore: .* release -'; then
             echo "skip: autoship release pr open"
-            exit 0
+            run=0
           fi
 
           if gh pr list --repo "$GITHUB_REPOSITORY" --state open --head "changeset-release/main" --json number --jq '.[0].number' | grep -q .; then
             echo "skip: version pr open"
-            exit 0
+            run=0
           fi
 
           latest="$(git tag --list 'v*' --sort=-version:refname | head -n1 || true)"
           if [ -n "${latest:-}" ] && [ "$(git rev-list --count "${latest}..HEAD")" = "0" ]; then
             echo "skip: no commits since ${latest}"
-            exit 0
+            run=0
           fi
 
+          echo "run=${run}" >> "$GITHUB_OUTPUT"
+
       - uses: actions/setup-node@v4
+        if: steps.gate.outputs.run == '1'
         with:
           node-version: 20
 
       - name: Install autoship
+        if: steps.gate.outputs.run == '1'
         run: npm i -g autoship@0.1.0
 
-      - name: autoship config
+      - name: git identity
+        if: steps.gate.outputs.run == '1'
         run: |
-          mkdir -p "$HOME/.autoship"
-          cat > "$HOME/.autoship/config.json" <<'EOF'
-          {
-            "repos": {
-              "mdv": {
-                "owner": "Dhruv2mars",
-                "repo": "mdv",
-                "baseBranch": "main",
-                "cloneUrl": "https://github.com/Dhruv2mars/mdv.git"
-              }
-            }
-          }
-          EOF
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-      - name: Compute type+message (autoship AI)
-        id: ai
+      - name: Run autoship (monorepo)
+        if: steps.gate.outputs.run == '1'
         env:
           AI_GATEWAY_API_KEY: ${{ secrets.AI_GATEWAY_API_KEY }}
           INPUT_TYPE: ${{ inputs.type }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           node --input-type=module <<'NODE'
           import { execSync } from 'node:child_process';
           import fs from 'node:fs';
           import path from 'node:path';
+
           const npmRoot = execSync('npm root -g', { encoding: 'utf8' }).trim();
           const gitMod = await import(`file://${path.join(npmRoot, 'autoship/dist/git.js')}`);
+          const ghMod = await import(`file://${path.join(npmRoot, 'autoship/dist/github.js')}`);
           const aiMod = await import(`file://${path.join(npmRoot, 'autoship/dist/ai.js')}`);
+
           const { GitOperations } = gitMod;
+          const { GitHubOperations } = ghMod;
           const { generateChangesetMessage, suggestReleaseType } = aiMod;
-          const out = process.env.GITHUB_OUTPUT;
 
           const cfg = {
             owner: 'Dhruv2mars',
@@ -106,11 +106,16 @@ jobs:
           };
 
           const git = new GitOperations(cfg);
+          const github = new GitHubOperations(cfg);
+
           await git.clone();
 
-          const packageName = await git.getPackageName();
-          const latestTag = await git.getLatestVersionTag();
+          const workDir = git.getWorkDir();
+          const cliPkgPath = path.join(workDir, 'packages/cli/package.json');
+          const cliPkg = JSON.parse(fs.readFileSync(cliPkgPath, 'utf8'));
+          const packageName = cliPkg.name;
 
+          const latestTag = await git.getLatestVersionTag();
           let ctx = {
             commits: [],
             diff: '',
@@ -138,10 +143,8 @@ jobs:
             ctx.commits = await git.getRecentCommits(15);
           }
 
-          let type = (process.env.INPUT_TYPE || '').trim();
-          if (!type) {
-            type = await suggestReleaseType(ctx);
-          }
+          let type = String(process.env.INPUT_TYPE || '').trim();
+          if (!type) type = await suggestReleaseType(ctx);
           if (!['patch', 'minor', 'major'].includes(type)) type = 'patch';
 
           let message = '';
@@ -153,15 +156,26 @@ jobs:
           message = String(message).replace(/\s+/g, ' ').trim();
           if (!message) message = `Release ${type}`;
 
-          fs.appendFileSync(out, `type=${type}\n`);
-          fs.appendFileSync(out, `message=${message}\n`);
+          const fullOptions = { type, message, skipConfirmations: true };
+          const branchName = `release/${type}-${Date.now()}`;
+
+          await git.createBranch(branchName);
+          await git.generateChangeset(fullOptions, packageName);
+          await git.stageAndCommit(`chore: add ${type} changeset for release`);
+          await git.push(branchName);
+
+          const prTitle = `chore: ${type} release - ${message.slice(0, 50)}`;
+          const prBody = `## Release Changeset\n\n**Type:** ${type}\n\n**Changes:**\n${message}\n\n---\n*This PR was created automatically by autoship*`;
+          const pr = await github.createPullRequest(branchName, prTitle, prBody);
+
+          const prChecks = await github.waitForChecks(pr.number);
+          if (!prChecks.success) throw new Error('changeset PR checks failed');
+          await github.mergePullRequest(pr.number, 'squash');
+
+          const versionPr = await github.waitForVersionPackagesPR();
+          const vChecks = await github.waitForChecks(versionPr.number);
+          if (!vChecks.success) throw new Error('version PR checks failed');
+          await github.mergePullRequest(versionPr.number, 'squash');
 
           await git.cleanup();
           NODE
-
-      - name: Run autoship
-        env:
-          AI_GATEWAY_API_KEY: ${{ secrets.AI_GATEWAY_API_KEY }}
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          autoship mdv -t "${{ steps.ai.outputs.type }}" -m "${{ steps.ai.outputs.message }}" -y
