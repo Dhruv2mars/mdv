@@ -86,10 +86,13 @@ Versioning:
 Release flow:
 - changesets + autoship
 - autoship entry: `bun run release:autoship`
-- CI release workflow publishes npm package from version PR merges
+- CI release workflow publishes npm package from version PR merges (OIDC trusted publishing)
+
+One-time npm setup:
+- In npm package settings for `@dhruv2mars/mdv`, add a Trusted Publisher for this GitHub repo + `release` workflow on `main`.
+- After trust is configured, GitHub Actions publishes without long-lived npm tokens.
 
 Required repo secrets:
-- `NPM_TOKEN`
 - `AI_GATEWAY_API_KEY` (autoship runtime)
 
 ## References
