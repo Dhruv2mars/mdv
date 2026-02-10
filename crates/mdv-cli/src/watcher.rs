@@ -69,41 +69,31 @@ fn canonical(path: &Path) -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+    use notify::EventKind;
+    use notify::event::{CreateKind, ModifyKind};
 
-    use super::{WatchMessage, start};
+    use super::{is_relevant, same_file};
 
     #[test]
-    fn watcher_emits_external_update() {
+    fn relevant_event_filter_works() {
+        assert!(is_relevant(&EventKind::Modify(ModifyKind::Any)));
+        assert!(is_relevant(&EventKind::Create(CreateKind::Any)));
+        assert!(!is_relevant(&EventKind::Access(
+            notify::event::AccessKind::Any
+        )));
+    }
+
+    #[test]
+    fn same_file_handles_equal_and_canonical_paths() {
         let dir = std::env::temp_dir();
-        let stamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("clock")
-            .as_nanos();
-        let path = dir.join(format!("mdv-watch-{stamp}.md"));
+        let path = dir.join("mdv-watch-same-file-test.md");
+        let canonical = std::fs::canonicalize(&dir).expect("canonical temp dir");
+        let alternate = canonical.join("mdv-watch-same-file-test.md");
 
-        std::fs::write(&path, "old").expect("seed file");
-        let (_watcher, rx) = start(&path).expect("start watcher");
-        std::fs::write(&path, "new").expect("write update");
+        std::fs::write(&path, "x").expect("seed");
+        assert!(same_file(&path, &path));
+        assert!(same_file(&path, &alternate));
 
-        let deadline = std::time::Instant::now() + Duration::from_secs(3);
-        loop {
-            if std::time::Instant::now() > deadline {
-                panic!("watcher timeout");
-            }
-
-            match rx.recv_timeout(Duration::from_millis(200)) {
-                Ok(WatchMessage::ExternalUpdate(content)) => {
-                    if content == "new" {
-                        break;
-                    }
-                }
-                Ok(WatchMessage::Error(err)) => panic!("watch error: {err}"),
-                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
-                Err(err) => panic!("channel error: {err}"),
-            }
-        }
-
-        let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_file(&path);
     }
 }

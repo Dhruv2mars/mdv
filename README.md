@@ -18,9 +18,16 @@ Or via npm workspace wrapper:
 bun --cwd packages/cli run mdv -- README.md
 ```
 
+Flags:
+- `--readonly`
+- `--no-watch`
+- `--perf`
+
 ## Keys
 - `Ctrl+Q` quit
 - `Ctrl+S` save
 - `Ctrl+R` reload external
 - `Ctrl+K` keep local
 - `Ctrl+M` merge conflict markers
+- `↑/↓/←/→` move cursor
+- `PageUp/PageDown` scroll panes

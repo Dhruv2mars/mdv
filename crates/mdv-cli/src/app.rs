@@ -1,6 +1,7 @@
+use std::fs;
 use std::io;
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
@@ -20,22 +21,48 @@ use crate::watcher::{self, WatchMessage};
 pub struct App {
     path: PathBuf,
     readonly: bool,
+    watch_enabled: bool,
+    perf_mode: bool,
     editor: EditorBuffer,
     status: String,
-    watcher: notify::RecommendedWatcher,
-    watch_rx: std::sync::mpsc::Receiver<WatchMessage>,
+    _watcher: Option<notify::RecommendedWatcher>,
+    watch_rx: Option<std::sync::mpsc::Receiver<WatchMessage>>,
+    editor_scroll: usize,
+    preview_scroll: usize,
+    editor_height: usize,
+    draw_time_us: u128,
+    watch_event_count: u64,
 }
 
 impl App {
-    pub fn new(path: PathBuf, readonly: bool, initial_text: String) -> Result<Self> {
-        let (watcher, watch_rx) = watcher::start(&path)?;
+    pub fn new(
+        path: PathBuf,
+        readonly: bool,
+        watch_enabled: bool,
+        perf_mode: bool,
+        initial_text: String,
+    ) -> Result<Self> {
+        let (watcher, watch_rx) = if watch_enabled {
+            let (watcher, watch_rx) = watcher::start(&path)?;
+            (Some(watcher), Some(watch_rx))
+        } else {
+            (None, None)
+        };
+
         Ok(Self {
             path,
             readonly,
+            watch_enabled,
+            perf_mode,
             editor: EditorBuffer::new(initial_text),
             status: "Ctrl+Q quit | Ctrl+S save | Ctrl+R reload | Ctrl+K keep | Ctrl+M merge".into(),
-            watcher,
+            _watcher: watcher,
             watch_rx,
+            editor_scroll: 0,
+            preview_scroll: 0,
+            editor_height: 1,
+            draw_time_us: 0,
+            watch_event_count: 0,
         })
     }
 
@@ -60,7 +87,10 @@ impl App {
 
         while running {
             self.handle_watch_updates();
+
+            let started = Instant::now();
             terminal.draw(|frame| self.draw(frame))?;
+            self.draw_time_us = started.elapsed().as_micros();
 
             if event::poll(Duration::from_millis(30))?
                 && let Event::Key(key) = event::read()?
@@ -74,9 +104,18 @@ impl App {
     }
 
     fn handle_watch_updates(&mut self) {
+        if !self.watch_enabled {
+            return;
+        }
+
+        let Some(watch_rx) = &self.watch_rx else {
+            return;
+        };
+
         let mut latest_external: Option<String> = None;
 
-        while let Ok(msg) = self.watch_rx.try_recv() {
+        while let Ok(msg) = watch_rx.try_recv() {
+            self.watch_event_count += 1;
             match msg {
                 WatchMessage::ExternalUpdate(text) => {
                     latest_external = Some(text);
@@ -92,6 +131,7 @@ impl App {
                 return;
             }
             self.editor.on_external_change(external);
+            self.ensure_cursor_visible();
             if self.editor.is_conflicted() {
                 self.status =
                     "External update conflict: Ctrl+K keep | Ctrl+R reload | Ctrl+M merge".into();
@@ -115,8 +155,14 @@ impl App {
                 }
             }
             (KeyCode::Char('r'), KeyModifiers::CONTROL) => {
-                self.editor.reload_external();
-                self.status = "Reloaded external".into();
+                if self.editor.is_conflicted() {
+                    self.editor.reload_external();
+                    self.status = "Reloaded external".into();
+                } else {
+                    let disk = fs::read_to_string(&self.path).unwrap_or_default();
+                    self.editor.on_external_change(disk);
+                    self.status = "Reloaded from disk".into();
+                }
             }
             (KeyCode::Char('k'), KeyModifiers::CONTROL) => {
                 self.editor.keep_local();
@@ -130,6 +176,12 @@ impl App {
             (KeyCode::Right, _) => self.editor.move_right(),
             (KeyCode::Up, _) => self.editor.move_up(),
             (KeyCode::Down, _) => self.editor.move_down(),
+            (KeyCode::PageUp, _) => {
+                self.editor_scroll = self.editor_scroll.saturating_sub(self.editor_height.max(1));
+            }
+            (KeyCode::PageDown, _) => {
+                self.editor_scroll += self.editor_height.max(1);
+            }
             (KeyCode::Enter, _) => {
                 if !self.readonly {
                     self.editor.insert_newline();
@@ -148,11 +200,22 @@ impl App {
             _ => {}
         }
 
+        self.ensure_cursor_visible();
         Ok(())
     }
 
-    fn draw(&self, frame: &mut Frame<'_>) {
-        let _keep_watcher_alive = &self.watcher;
+    fn ensure_cursor_visible(&mut self) {
+        let (cursor_line, _) = self.editor.line_col_at_cursor();
+        if cursor_line < self.editor_scroll {
+            self.editor_scroll = cursor_line;
+        } else if cursor_line >= self.editor_scroll + self.editor_height {
+            self.editor_scroll = cursor_line.saturating_sub(self.editor_height.saturating_sub(1));
+        }
+
+        self.preview_scroll = self.editor_scroll;
+    }
+
+    fn draw(&mut self, frame: &mut Frame<'_>) {
         let area = frame.area();
 
         let vertical = Layout::default()
@@ -165,10 +228,19 @@ impl App {
             .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
             .split(vertical[0]);
 
-        let editor = Paragraph::new(self.editor.text())
+        let editor_height = panes[0].height.saturating_sub(2) as usize;
+        self.editor_height = editor_height.max(1);
+
+        let editor_lines = to_lines(self.editor.text());
+        self.editor_scroll =
+            clamp_scroll(self.editor_scroll, editor_lines.len(), self.editor_height);
+        let editor_visible = slice_lines(&editor_lines, self.editor_scroll, self.editor_height);
+
+        let editor = Paragraph::new(editor_visible)
             .block(Block::default().borders(Borders::ALL).title("Editor"));
         frame.render_widget(editor, panes[0]);
 
+        let preview_height = panes[1].height.saturating_sub(2) as usize;
         let preview_width = panes[1].width.saturating_sub(2);
         let mut preview_lines = render_preview_lines(self.editor.text(), preview_width);
 
@@ -181,7 +253,16 @@ impl App {
             preview_lines.extend(conflict.external.lines().map(ToString::to_string));
         }
 
-        let preview = Paragraph::new(preview_lines.join("\n"))
+        self.preview_scroll = clamp_scroll(
+            self.preview_scroll,
+            preview_lines.len(),
+            preview_height.max(1),
+        );
+
+        let preview_visible =
+            slice_lines(&preview_lines, self.preview_scroll, preview_height.max(1));
+
+        let preview = Paragraph::new(preview_visible)
             .block(Block::default().borders(Borders::ALL).title("Preview"));
         frame.render_widget(preview, panes[1]);
 
@@ -191,17 +272,59 @@ impl App {
             Style::default().fg(Color::Green)
         };
 
-        let status = Paragraph::new(self.status.as_str()).style(status_style);
+        let status = Paragraph::new(status_line(
+            &self.status,
+            self.perf_mode,
+            self.draw_time_us,
+            self.watch_event_count,
+        ))
+        .style(status_style);
         frame.render_widget(status, vertical[1]);
 
         if !self.readonly {
             let cursor = cursor_rect(panes[0]);
             let (line, col) = self.editor.line_col_at_cursor();
-            let x = (cursor.x + col as u16).min(cursor.x + cursor.width.saturating_sub(1));
-            let y = (cursor.y + line as u16).min(cursor.y + cursor.height.saturating_sub(1));
-            frame.set_cursor_position((x, y));
+            let visible_line = line.saturating_sub(self.editor_scroll) as u16;
+            if visible_line < cursor.height {
+                let x = (cursor.x + col as u16).min(cursor.x + cursor.width.saturating_sub(1));
+                let y = cursor.y + visible_line;
+                frame.set_cursor_position((x, y));
+            }
         }
     }
+}
+
+fn status_line(base: &str, perf_mode: bool, draw_time_us: u128, watch_events: u64) -> String {
+    if !perf_mode {
+        return base.to_string();
+    }
+
+    format!("{base} | perf draw={draw_time_us}us watch_events={watch_events}")
+}
+
+fn to_lines(text: &str) -> Vec<String> {
+    if text.is_empty() {
+        return vec![String::new()];
+    }
+    text.lines().map(ToString::to_string).collect()
+}
+
+fn clamp_scroll(scroll: usize, total: usize, height: usize) -> usize {
+    if total <= height {
+        0
+    } else {
+        scroll.min(total - height)
+    }
+}
+
+fn slice_lines(lines: &[String], scroll: usize, height: usize) -> String {
+    lines
+        .iter()
+        .skip(scroll)
+        .take(height)
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn cursor_rect(area: Rect) -> Rect {
@@ -210,5 +333,37 @@ fn cursor_rect(area: Rect) -> Rect {
         y: area.y + 1,
         width: area.width.saturating_sub(2),
         height: area.height.saturating_sub(2),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{clamp_scroll, slice_lines, status_line, to_lines};
+
+    #[test]
+    fn clamp_scroll_bounds() {
+        assert_eq!(clamp_scroll(0, 3, 5), 0);
+        assert_eq!(clamp_scroll(1, 10, 4), 1);
+        assert_eq!(clamp_scroll(20, 10, 4), 6);
+    }
+
+    #[test]
+    fn slice_lines_respects_window() {
+        let lines = vec!["a".into(), "b".into(), "c".into(), "d".into()];
+        assert_eq!(slice_lines(&lines, 1, 2), "b\nc");
+    }
+
+    #[test]
+    fn status_line_perf_suffix() {
+        assert_eq!(status_line("ok", false, 12, 3), "ok");
+        assert_eq!(
+            status_line("ok", true, 12, 3),
+            "ok | perf draw=12us watch_events=3"
+        );
+    }
+
+    #[test]
+    fn to_lines_returns_single_empty_line_for_empty_text() {
+        assert_eq!(to_lines(""), vec![String::new()]);
     }
 }

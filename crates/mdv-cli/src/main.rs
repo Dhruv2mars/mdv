@@ -16,11 +16,19 @@ struct Cli {
     /// Disable editing
     #[arg(long)]
     readonly: bool,
+
+    /// Disable file watcher
+    #[arg(long, default_value_t = false)]
+    no_watch: bool,
+
+    /// Show perf info in status line
+    #[arg(long, default_value_t = false)]
+    perf: bool,
 }
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
     let text = fs::read_to_string(&cli.path).unwrap_or_default();
-    let mut app = app::App::new(cli.path, cli.readonly, text)?;
+    let mut app = app::App::new(cli.path, cli.readonly, !cli.no_watch, cli.perf, text)?;
     app.run()
 }
