@@ -52,6 +52,11 @@ jobs:
           node-version: 20
           registry-url: https://registry.npmjs.org
 
+      - name: npm (trusted publisher)
+        run: |
+          npm i -g npm@^11.5.1
+          npm -v
+
       - uses: oven-sh/setup-bun@v2
 
       - name: Install deps
