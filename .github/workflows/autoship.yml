@@ -39,6 +39,12 @@ jobs:
             run=0
           fi
 
+          files="$(git diff-tree --no-commit-id --name-only -r HEAD || true)"
+          if echo "$files" | grep -Eq '^\.changeset/|^packages/cli/package\.json$|^CHANGELOG\.md$'; then
+            echo "skip: release files touched"
+            run=0
+          fi
+
           if ls .changeset/*.md 2>/dev/null | grep -vE '/README\.md$' | grep -q .; then
             echo "skip: changesets exist"
             run=0
