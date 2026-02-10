@@ -22,6 +22,12 @@ Flags:
 - `--readonly`
 - `--no-watch`
 - `--perf`
+- `--stream` (read markdown continuously from stdin; readonly mode)
+
+Stream example:
+```bash
+tail -f AGENT_LOG.md | cargo run -p mdv-cli -- --stream --perf
+```
 
 ## Keys
 - `Ctrl+Q` quit

@@ -1,5 +1,5 @@
 use std::fs;
-use std::io;
+use std::io::{self, IsTerminal};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -16,26 +16,32 @@ use ratatui::style::{Color, Style};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::{Frame, Terminal};
 
+use crate::stream::{self, StreamMessage};
 use crate::watcher::{self, WatchMessage};
 
 pub struct App {
-    path: PathBuf,
+    path: Option<PathBuf>,
     readonly: bool,
     watch_enabled: bool,
+    stream_mode: bool,
     perf_mode: bool,
     editor: EditorBuffer,
     status: String,
     _watcher: Option<notify::RecommendedWatcher>,
     watch_rx: Option<std::sync::mpsc::Receiver<WatchMessage>>,
+    stream_rx: Option<std::sync::mpsc::Receiver<StreamMessage>>,
     editor_scroll: usize,
     preview_scroll: usize,
     editor_height: usize,
     draw_time_us: u128,
     watch_event_count: u64,
+    stream_event_count: u64,
+    stream_done: bool,
+    interactive_input: bool,
 }
 
 impl App {
-    pub fn new(
+    pub fn new_file(
         path: PathBuf,
         readonly: bool,
         watch_enabled: bool,
@@ -50,32 +56,65 @@ impl App {
         };
 
         Ok(Self {
-            path,
+            path: Some(path),
             readonly,
             watch_enabled,
+            stream_mode: false,
             perf_mode,
             editor: EditorBuffer::new(initial_text),
             status: "Ctrl+Q quit | Ctrl+S save | Ctrl+R reload | Ctrl+K keep | Ctrl+M merge".into(),
             _watcher: watcher,
             watch_rx,
+            stream_rx: None,
             editor_scroll: 0,
             preview_scroll: 0,
             editor_height: 1,
             draw_time_us: 0,
             watch_event_count: 0,
+            stream_event_count: 0,
+            stream_done: false,
+            interactive_input: io::stdin().is_terminal(),
+        })
+    }
+
+    pub fn new_stream(perf_mode: bool) -> Result<Self> {
+        Ok(Self {
+            path: None,
+            readonly: true,
+            watch_enabled: false,
+            stream_mode: true,
+            perf_mode,
+            editor: EditorBuffer::new(String::new()),
+            status: "stream mode: stdin -> preview | Ctrl+Q quit".into(),
+            _watcher: None,
+            watch_rx: None,
+            stream_rx: Some(stream::start()),
+            editor_scroll: 0,
+            preview_scroll: 0,
+            editor_height: 1,
+            draw_time_us: 0,
+            watch_event_count: 0,
+            stream_event_count: 0,
+            stream_done: false,
+            interactive_input: io::stdin().is_terminal(),
         })
     }
 
     pub fn run(&mut self) -> Result<()> {
-        enable_raw_mode()?;
         let mut stdout = io::stdout();
         execute!(stdout, EnterAlternateScreen)?;
         let backend = CrosstermBackend::new(stdout);
         let mut terminal = Terminal::new(backend)?;
 
+        if self.interactive_input {
+            enable_raw_mode()?;
+        }
+
         let loop_result = self.run_loop(&mut terminal);
 
-        disable_raw_mode()?;
+        if self.interactive_input {
+            disable_raw_mode()?;
+        }
         execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
         terminal.show_cursor()?;
 
@@ -87,12 +126,18 @@ impl App {
 
         while running {
             self.handle_watch_updates();
+            self.handle_stream_updates();
+
+            if !self.interactive_input && self.stream_mode && self.stream_done {
+                running = false;
+            }
 
             let started = Instant::now();
             terminal.draw(|frame| self.draw(frame))?;
             self.draw_time_us = started.elapsed().as_micros();
 
-            if event::poll(Duration::from_millis(30))?
+            if self.interactive_input
+                && event::poll(Duration::from_millis(30))?
                 && let Event::Key(key) = event::read()?
                 && key.kind == event::KeyEventKind::Press
             {
@@ -141,6 +186,47 @@ impl App {
         }
     }
 
+    fn handle_stream_updates(&mut self) {
+        if !self.stream_mode {
+            return;
+        }
+
+        let Some(stream_rx) = &self.stream_rx else {
+            return;
+        };
+
+        let mut latest: Option<String> = None;
+
+        while let Ok(msg) = stream_rx.try_recv() {
+            self.stream_event_count += 1;
+            match msg {
+                StreamMessage::Update(text) => {
+                    latest = Some(text);
+                }
+                StreamMessage::End => {
+                    self.stream_done = true;
+                    self.status = "stdin closed | Ctrl+Q quit".into();
+                }
+                StreamMessage::Error(err) => {
+                    self.status = format!("stream error: {err}");
+                }
+            }
+        }
+
+        if let Some(text) = latest {
+            if text == self.editor.text() {
+                return;
+            }
+
+            self.editor.on_external_change(text);
+            self.ensure_cursor_visible();
+
+            if !self.stream_done {
+                self.status = "stream update received".into();
+            }
+        }
+    }
+
     fn handle_key(&mut self, key: KeyEvent, running: &mut bool) -> Result<()> {
         match (key.code, key.modifiers) {
             (KeyCode::Char('q'), KeyModifiers::CONTROL) => {
@@ -149,17 +235,21 @@ impl App {
             (KeyCode::Char('s'), KeyModifiers::CONTROL) => {
                 if self.readonly {
                     self.status = "Readonly: save disabled".into();
-                } else {
-                    self.editor.save_to_path(&self.path)?;
+                } else if let Some(path) = &self.path {
+                    self.editor.save_to_path(path)?;
                     self.status = "Saved".into();
+                } else {
+                    self.status = "No path: save disabled".into();
                 }
             }
             (KeyCode::Char('r'), KeyModifiers::CONTROL) => {
-                if self.editor.is_conflicted() {
+                if self.stream_mode {
+                    self.status = "Stream mode: reload disabled".into();
+                } else if self.editor.is_conflicted() {
                     self.editor.reload_external();
                     self.status = "Reloaded external".into();
-                } else {
-                    let disk = fs::read_to_string(&self.path).unwrap_or_default();
+                } else if let Some(path) = &self.path {
+                    let disk = fs::read_to_string(path).unwrap_or_default();
                     self.editor.on_external_change(disk);
                     self.status = "Reloaded from disk".into();
                 }
@@ -277,6 +367,7 @@ impl App {
             self.perf_mode,
             self.draw_time_us,
             self.watch_event_count,
+            self.stream_event_count,
         ))
         .style(status_style);
         frame.render_widget(status, vertical[1]);
@@ -294,12 +385,20 @@ impl App {
     }
 }
 
-fn status_line(base: &str, perf_mode: bool, draw_time_us: u128, watch_events: u64) -> String {
+fn status_line(
+    base: &str,
+    perf_mode: bool,
+    draw_time_us: u128,
+    watch_events: u64,
+    stream_events: u64,
+) -> String {
     if !perf_mode {
         return base.to_string();
     }
 
-    format!("{base} | perf draw={draw_time_us}us watch_events={watch_events}")
+    format!(
+        "{base} | perf draw={draw_time_us}us watch_events={watch_events} stream_events={stream_events}"
+    )
 }
 
 fn to_lines(text: &str) -> Vec<String> {
@@ -355,10 +454,10 @@ mod tests {
 
     #[test]
     fn status_line_perf_suffix() {
-        assert_eq!(status_line("ok", false, 12, 3), "ok");
+        assert_eq!(status_line("ok", false, 12, 3, 2), "ok");
         assert_eq!(
-            status_line("ok", true, 12, 3),
-            "ok | perf draw=12us watch_events=3"
+            status_line("ok", true, 12, 3, 2),
+            "ok | perf draw=12us watch_events=3 stream_events=2"
         );
     }
 
