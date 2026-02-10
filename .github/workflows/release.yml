@@ -22,6 +22,11 @@ jobs:
         with:
           node-version: 24
 
+      - name: npm latest
+        run: |
+          npm i -g npm@latest
+          npm -v
+
       - uses: oven-sh/setup-bun@v2
 
       - name: Install deps
