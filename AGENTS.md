@@ -27,11 +27,11 @@ Core diff: very fast startup/render/scroll, in-app edit, realtime file sync.
 - Use `autoship` for releases.
 - Repo release flow must use Changesets.
 - Autoship already configured for this repo.
-- Requirements at release time: `gh` auth, `AI_GATEWAY_API_KEY`.
+- Requirements at release time: `gh` auth. `AI_GATEWAY_API_KEY` recommended (else generic msg fallback).
 - Autoship run (manual): `bun run release:autoship`.
 - Autoship run (CI): `.github/workflows/autoship.yml` (push main + workflow_dispatch).
 - Expected flow (per autoship): changeset PR -> wait CI -> merge -> version packages PR -> merge -> publish -> tag -> binaries.
-- Note: autoship upstream assumes single-package repo; our workflow targets `packages/cli` package for changeset name.
+- Note: autoship upstream assumes single-package repo (reads root `package.json`); our CI workflow imports autoship internals + targets `packages/cli` for changeset package.
 
 ## References
 - Autoship repo: `https://github.com/vercel-labs/autoship`.
