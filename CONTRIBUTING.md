@@ -26,7 +26,9 @@ If change affects shipped package behavior, add a changeset:
 bunx changeset
 ```
 
-Then run autoship:
+Then publish from tag:
 ```bash
-bun run release:autoship
+TAG="v$(node -p \"require('./packages/cli/package.json').version\")"
+git tag "$TAG"
+git push origin "$TAG"
 ```
