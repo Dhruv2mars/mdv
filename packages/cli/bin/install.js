@@ -6,6 +6,7 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  rmSync,
   renameSync
 } from 'node:fs';
 import { homedir } from 'node:os';
@@ -13,6 +14,7 @@ import { join } from 'node:path';
 import https from 'node:https';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { assetNameFor, resolveReleaseAssetUrl } from './install-lib.js';
 
 const REPO = 'Dhruv2mars/mdv';
 
@@ -27,22 +29,18 @@ if (existsSync(dest)) process.exit(0);
 mkdirSync(binDir, { recursive: true });
 
 const version = pkgVersion();
-const asset = assetName();
+const asset = assetNameFor();
 const url = `https://github.com/${REPO}/releases/download/v${version}/${asset}`;
 const tmp = `${dest}.tmp-${Date.now()}`;
 
 try {
   console.error(`mdv: download ${asset} v${version}`);
-  await download(url, tmp);
+  await downloadWithFallback(url, version, asset, tmp);
   if (process.platform !== 'win32') chmodSync(tmp, 0o755);
   renameSync(tmp, dest);
   process.exit(0);
 } catch (err) {
-  try {
-    if (existsSync(tmp)) {
-      // best-effort cleanup; ignore
-    }
-  } catch {}
+  try { rmSync(tmp, { force: true }); } catch {}
 
   console.error(`mdv: download failed (${String(err)})`);
 
@@ -64,13 +62,6 @@ function pkgVersion() {
   } catch {
     return process.env.npm_package_version || '0.0.0';
   }
-}
-
-function assetName() {
-  const platform = process.platform;
-  const arch = process.arch;
-  const ext = platform === 'win32' ? '.exe' : '';
-  return `mdv-${platform}-${arch}${ext}`;
 }
 
 function download(url, outPath) {
@@ -97,6 +88,67 @@ function download(url, outPath) {
         file.on('error', reject);
       }
     );
+
+    req.on('error', reject);
+  });
+}
+
+async function downloadWithFallback(primaryUrl, version, asset, outPath) {
+  try {
+    await download(primaryUrl, outPath);
+    return;
+  } catch (primaryErr) {
+    const fallbackUrl = await resolveReleaseAssetUrl({
+      version,
+      asset,
+      getRelease: getRelease
+    });
+
+    if (!fallbackUrl || fallbackUrl === primaryUrl) {
+      throw primaryErr;
+    }
+
+    console.error(`mdv: fallback download ${fallbackUrl}`);
+    await download(fallbackUrl, outPath);
+  }
+}
+
+async function getRelease(kind) {
+  const base = `https://api.github.com/repos/${REPO}/releases`;
+  return requestJson(`${base}/${kind}`);
+}
+
+function requestJson(url) {
+  return new Promise((resolve, reject) => {
+    const headers = {
+      'User-Agent': 'mdv-installer',
+      Accept: 'application/vnd.github+json'
+    };
+
+    if (process.env.GITHUB_TOKEN) {
+      headers.Authorization = `Bearer ${process.env.GITHUB_TOKEN}`;
+    }
+
+    const req = https.get(url, { headers }, (res) => {
+      let data = '';
+      res.setEncoding('utf8');
+      res.on('data', (chunk) => {
+        data += chunk;
+      });
+      res.on('end', () => {
+        if ((res.statusCode || 500) >= 400) {
+          const err = new Error(`http ${res.statusCode}`);
+          err.status = res.statusCode;
+          reject(err);
+          return;
+        }
+        try {
+          resolve(JSON.parse(data || '{}'));
+        } catch (err) {
+          reject(err);
+        }
+      });
+    });
 
     req.on('error', reject);
   });
