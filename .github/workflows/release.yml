@@ -89,7 +89,7 @@ jobs:
           npm config get registry
 
       - name: Auth npm (token, optional)
-        if: ${{ secrets.NPM_TOKEN != '' }}
+        if: ${{ secrets.NPM_TOKEN }}
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
