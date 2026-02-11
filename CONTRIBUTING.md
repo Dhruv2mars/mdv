@@ -26,7 +26,12 @@ If change affects shipped package behavior, add a changeset:
 bunx changeset
 ```
 
-Then publish from tag:
+Version packages:
+```bash
+bun run release:version
+```
+
+Commit version files, then publish from tag:
 ```bash
 TAG="v$(node -p \"require('./packages/cli/package.json').version\")"
 git tag "$TAG"

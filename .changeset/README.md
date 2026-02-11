@@ -12,7 +12,9 @@ Version packages:
 bun run release:version
 ```
 
-Publish packages:
+Commit updated `package.json` + changelog files, then push release tag:
 ```bash
-bun run release:publish
+TAG="v$(node -p \"require('./packages/cli/package.json').version\")"
+git tag "$TAG"
+git push origin "$TAG"
 ```

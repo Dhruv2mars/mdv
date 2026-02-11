@@ -29,6 +29,7 @@ Core diff: very fast startup/render/scroll, in-app edit, realtime file sync.
 - Single release workflow: `.github/workflows/release.yml`.
 - Workflow validates tag == `packages/cli` version, creates GitHub release, uploads binaries, publishes npm.
 - npm auth mode: Trusted Publisher (OIDC) only.
+- Do not run `npm publish` manually from local.
 
 ## References
 - GitHub release workflow: `.github/workflows/release.yml`.
