@@ -56,8 +56,7 @@ jobs:
         with:
           node-version: 24
           registry-url: "https://registry.npmjs.org"
-          # Prevent setup-node defaulting to GITHUB_TOKEN for npm auth.
-          token: ""
+          check-latest: true
 
       - name: npm latest
         run: |
@@ -89,9 +88,16 @@ jobs:
           echo "has_node_auth_token=$([ -n "${NODE_AUTH_TOKEN:-}" ] && echo yes || echo no)"
           npm config get registry
 
-      - name: Publish (trusted publisher)
+      - name: Auth npm (token, optional)
+        if: ${{ secrets.NPM_TOKEN != '' }}
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          rc="${NPM_CONFIG_USERCONFIG:-$HOME/.npmrc}"
+          echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" >> "$rc"
+
+      - name: Publish (trusted publisher)
         run: |
           set -euo pipefail
           local_v="$(node -p "require('./packages/cli/package.json').version")"
@@ -99,9 +105,6 @@ jobs:
           if [ -n "${remote_v:-}" ] && [ "${remote_v}" = "${local_v}" ]; then
             echo "skip: already on npm (${remote_v})"
             exit 0
-          fi
-          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
-            echo "note: no secrets.NPM_TOKEN; relying on npm trusted publishing (OIDC)"
           fi
           (cd packages/cli && npm publish --provenance --access public)
 
