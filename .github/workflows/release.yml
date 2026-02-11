@@ -161,4 +161,8 @@ jobs:
             echo "skip: already on npm (${remote_v})"
             exit 0
           fi
+          rc="${RUNNER_TEMP:-/tmp}/npmrc"
+          echo "registry=https://registry.npmjs.org/" > "$rc"
+          export NPM_CONFIG_USERCONFIG="$rc"
+          unset NODE_AUTH_TOKEN || true
           (cd packages/cli && npm publish --provenance --access public)
