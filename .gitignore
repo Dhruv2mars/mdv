@@ -26,6 +26,7 @@ dist/
 build/
 out/
 .cache/
+*.tgz
 
 # OS/Editor
 .DS_Store
