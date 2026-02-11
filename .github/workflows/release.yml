@@ -4,16 +4,11 @@ on:
   push:
     tags:
       - 'v*'
-  workflow_dispatch:
-    inputs:
-      tag:
-        description: 'release tag (vX.Y.Z)'
-        required: true
 
 env:
-  RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
+  RELEASE_TAG: ${{ github.ref_name }}
 
-concurrency: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+concurrency: ${{ github.workflow }}-${{ github.ref_name }}
 
 jobs:
   validate:
