@@ -21,7 +21,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-          registry-url: "https://registry.npmjs.org"
 
       - name: npm latest
         run: |
@@ -87,18 +86,9 @@ jobs:
           echo "has_node_auth_token=$([ -n "${NODE_AUTH_TOKEN:-}" ] && echo yes || echo no)"
           npm config get registry
 
-      - name: Auth npm (token, optional)
+      - name: Publish (oidc, fallback token)
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: |
-          set -euo pipefail
-          if [ -z "${NPM_TOKEN:-}" ]; then
-            exit 0
-          fi
-          rc="${NPM_CONFIG_USERCONFIG:-$HOME/.npmrc}"
-          echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" >> "$rc"
-
-      - name: Publish (trusted publisher)
         run: |
           set -euo pipefail
           local_v="$(node -p "require('./packages/cli/package.json').version")"
@@ -107,7 +97,26 @@ jobs:
             echo "skip: already on npm (${remote_v})"
             exit 0
           fi
-          (cd packages/cli && npm publish --provenance --access public)
+          rc="${RUNNER_TEMP:-/tmp}/npmrc"
+          echo "registry=https://registry.npmjs.org/" > "$rc"
+          export NPM_CONFIG_USERCONFIG="$rc"
+          unset NODE_AUTH_TOKEN || true
+
+          publish() {
+            (cd packages/cli && npm publish --provenance --access public)
+          }
+
+          if publish; then
+            exit 0
+          fi
+
+          if [ -z "${NPM_TOKEN:-}" ]; then
+            echo "publish failed; need npm trusted publisher (oidc) or set secrets.NPM_TOKEN"
+            exit 1
+          fi
+
+          echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" >> "$rc"
+          publish
 
   tag:
     runs-on: ubuntu-latest
