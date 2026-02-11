@@ -26,9 +26,9 @@ Core diff: very fast startup/render/scroll, in-app edit, realtime file sync.
 ## Package Releases
 - Repo release flow must use Changesets.
 - Release trigger is git tag `vX.Y.Z` only.
-- Single release workflow: `.github/workflows/binaries.yml`.
+- Single release workflow: `.github/workflows/release.yml`.
 - Workflow validates tag == `packages/cli` version, creates GitHub release, uploads binaries, publishes npm.
 - npm auth mode: Trusted Publisher (OIDC) only.
 
 ## References
-- GitHub release workflow: `.github/workflows/binaries.yml`.
+- GitHub release workflow: `.github/workflows/release.yml`.
