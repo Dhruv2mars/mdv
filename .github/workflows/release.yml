@@ -88,11 +88,13 @@ jobs:
           npm config get registry
 
       - name: Auth npm (token, optional)
-        if: ${{ secrets.NPM_TOKEN }}
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           set -euo pipefail
+          if [ -z "${NPM_TOKEN:-}" ]; then
+            exit 0
+          fi
           rc="${NPM_CONFIG_USERCONFIG:-$HOME/.npmrc}"
           echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" >> "$rc"
 
