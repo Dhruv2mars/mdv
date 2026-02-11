@@ -24,15 +24,11 @@ Core diff: very fast startup/render/scroll, in-app edit, realtime file sync.
 - Release flow builds multi-platform binaries and publishes npm package.
 
 ## Package Releases
-- Use `autoship` for releases.
 - Repo release flow must use Changesets.
-- Autoship already configured for this repo.
-- Requirements at release time: `gh` auth. `AI_GATEWAY_API_KEY` recommended (else generic msg fallback).
-- For full autoship flow (PR checks run): set Actions secret `AUTOSHIP_GH_TOKEN` (PAT). Else autoship runs lint/test inside its own workflow.
-- Autoship run (manual): `bun run release:autoship`.
-- Autoship run (CI): `.github/workflows/autoship.yml` (push main + workflow_dispatch).
-- Expected flow (per autoship): changeset PR -> wait CI -> merge -> version packages PR -> merge -> publish -> tag -> binaries.
-- Note: autoship upstream assumes single-package repo (reads root `package.json`); our CI workflow imports autoship internals + targets `packages/cli` for changeset package.
+- Release trigger is git tag `vX.Y.Z` only.
+- Single release workflow: `.github/workflows/binaries.yml`.
+- Workflow validates tag == `packages/cli` version, creates GitHub release, uploads binaries, publishes npm.
+- npm auth mode: Trusted Publisher (OIDC) only.
 
 ## References
-- Autoship repo: `https://github.com/vercel-labs/autoship`.
+- GitHub release workflow: `.github/workflows/binaries.yml`.
