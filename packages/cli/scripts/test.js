@@ -4,6 +4,12 @@ import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+const unit = spawnSync(process.execPath, ['--test', join(fileURLToPath(new URL('.', import.meta.url)), 'install.test.js')], {
+  stdio: 'inherit',
+  env: process.env
+});
+if (unit.status !== 0) process.exit(unit.status ?? 1);
+
 const here = fileURLToPath(new URL('.', import.meta.url));
 const cliDir = join(here, '..');
 const repo = join(cliDir, '..', '..');
@@ -25,4 +31,3 @@ const launcher = join(cliDir, 'bin', 'mdv.js');
 const env = { ...process.env, MDV_BIN: bin, MDV_SKIP_DOWNLOAD: '1' };
 const res = spawnSync(process.execPath, [launcher, '--help'], { stdio: 'inherit', env });
 process.exit(res.status ?? 1);
-
