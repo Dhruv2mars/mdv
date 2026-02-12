@@ -27,6 +27,7 @@ import {
   packageManagerHintFromEnv,
   parseChecksumForAsset,
   resolveReleaseAssetBundle,
+  shouldInstallBinary,
   shouldUseFallbackUrl
 } from './install-lib.js';
 
@@ -44,13 +45,16 @@ const backoffMs = tuning.backoffMs;
 const backoffJitterMs = tuning.backoffJitterMs;
 const debugEnabled = process.env.MDV_INSTALL_DEBUG === '1';
 const installStartedAt = Date.now();
+const version = pkgVersion();
+const installedVersion = readInstalledVersion(metaPath);
 
 if (process.env.MDV_SKIP_DOWNLOAD === '1') process.exit(0);
-if (existsSync(dest)) process.exit(0);
+if (!shouldInstallBinary({ binExists: existsSync(dest), installedVersion, packageVersion: version })) {
+  process.exit(0);
+}
 
 mkdirSync(binDir, { recursive: true });
 
-const version = pkgVersion();
 const asset = assetNameFor();
 const checksumsAsset = checksumsAssetNameFor();
 const cachePaths = cachePathsFor(installRoot, version, asset, checksumsAsset);
@@ -113,6 +117,17 @@ function pkgVersion() {
     return JSON.parse(p).version;
   } catch {
     return process.env.npm_package_version || '0.0.0';
+  }
+}
+
+function readInstalledVersion(path) {
+  if (!existsSync(path)) return null;
+  try {
+    const meta = JSON.parse(readFileSync(path, 'utf8'));
+    const version = meta?.version;
+    return typeof version === 'string' && version.length > 0 ? version : null;
+  } catch {
+    return null;
   }
 }
 

@@ -32,6 +32,12 @@ export function packageManagerHintFromEnv(env = process.env) {
   return null;
 }
 
+export function shouldInstallBinary({ binExists, installedVersion, packageVersion }) {
+  if (!binExists) return true;
+  if (typeof packageVersion !== 'string' || packageVersion.length === 0) return false;
+  return installedVersion !== packageVersion;
+}
+
 function parseIntEnv(value, fallback, min, max) {
   const parsed = Number.parseInt(String(value ?? ''), 10);
   if (!Number.isFinite(parsed)) return fallback;

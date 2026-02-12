@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import {
   detectInstalledPackageManager,
   resolveUpdateCommand,
+  shouldInstallBinary,
   shouldRunUpdateCommand
 } from '../bin/mdv-lib.js';
 
@@ -64,6 +65,25 @@ test('detectInstalledPackageManager probes globally installed package', () => {
   assert.equal(manager, 'pnpm');
 });
 
+test('shouldInstallBinary handles missing/current/stale install states', () => {
+  assert.equal(
+    shouldInstallBinary({ binExists: false, installedVersion: null, packageVersion: '0.0.17' }),
+    true
+  );
+  assert.equal(
+    shouldInstallBinary({ binExists: true, installedVersion: '0.0.17', packageVersion: '0.0.17' }),
+    false
+  );
+  assert.equal(
+    shouldInstallBinary({ binExists: true, installedVersion: '0.0.16', packageVersion: '0.0.17' }),
+    true
+  );
+  assert.equal(
+    shouldInstallBinary({ binExists: true, installedVersion: null, packageVersion: '' }),
+    false
+  );
+});
+
 test('launcher install-miss path reports install missing without runtime crash', () => {
   const root = mkdtempSync(join(tmpdir(), 'mdv-launcher-miss-'));
   const launcher = fileURLToPath(new URL('../bin/mdv.js', import.meta.url));
@@ -80,4 +100,34 @@ test('launcher install-miss path reports install missing without runtime crash',
   assert.notEqual(res.status, 0);
   assert.match(output, /mdv: install missing/);
   assert.doesNotMatch(output, /ReferenceError/i);
+});
+
+test('launcher rejects stale installed binary when version mismatches', () => {
+  if (process.platform === 'win32') return;
+
+  const root = mkdtempSync(join(tmpdir(), 'mdv-launcher-stale-'));
+  const bin = join(root, 'bin', 'mdv');
+  mkdirSync(join(root, 'bin'), { recursive: true });
+  writeFileSync(bin, '#!/bin/sh\necho STALE-BIN\n', 'utf8');
+  chmodSync(bin, 0o755);
+  writeFileSync(
+    join(root, 'install-meta.json'),
+    JSON.stringify({ packageManager: 'bun', version: '0.0.1', savedAt: '2026-01-01T00:00:00Z' }),
+    'utf8'
+  );
+
+  const launcher = fileURLToPath(new URL('../bin/mdv.js', import.meta.url));
+  const res = spawnSync(process.execPath, [launcher], {
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      MDV_INSTALL_ROOT: root,
+      MDV_SKIP_DOWNLOAD: '1'
+    }
+  });
+
+  const output = `${res.stdout || ''}\n${res.stderr || ''}`;
+  assert.notEqual(res.status, 0);
+  assert.match(output, /mdv: install missing/);
+  assert.doesNotMatch(output, /STALE-BIN/);
 });

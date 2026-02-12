@@ -2,10 +2,12 @@ import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { packageManagerHintFromEnv } from './install-lib.js';
+import { packageManagerHintFromEnv, shouldInstallBinary } from './install-lib.js';
 
 const PACKAGE_NAME = '@dhruv2mars/mdv@latest';
 const SUPPORTED_PMS = new Set(['bun', 'pnpm', 'yarn', 'npm']);
+
+export { shouldInstallBinary };
 
 export function binNameForPlatform(platform = process.platform) {
   return platform === 'win32' ? 'mdv.exe' : 'mdv';
@@ -13,6 +15,10 @@ export function binNameForPlatform(platform = process.platform) {
 
 export function resolveInstallRoot(env = process.env, home = homedir()) {
   return env.MDV_INSTALL_ROOT || join(home, '.mdv');
+}
+
+export function resolveInstallMetaPath(env = process.env, home = homedir()) {
+  return join(resolveInstallRoot(env, home), 'install-meta.json');
 }
 
 export function resolveInstalledBin(env = process.env, platform = process.platform, home = homedir()) {
@@ -32,14 +38,19 @@ function updateArgsFor(pm) {
   return ['install', '-g', PACKAGE_NAME];
 }
 
-function readInstallMeta(installRoot) {
-  const path = join(installRoot, 'install-meta.json');
+export function readInstallMeta(env = process.env, home = homedir()) {
+  const path = resolveInstallMetaPath(env, home);
   if (!existsSync(path)) return null;
   try {
     return JSON.parse(readFileSync(path, 'utf8'));
   } catch {
     return null;
   }
+}
+
+export function resolveInstalledVersion(env = process.env, home = homedir()) {
+  const version = readInstallMeta(env, home)?.version;
+  return typeof version === 'string' && version.length > 0 ? version : null;
 }
 
 function isSupportedPm(pm) {
@@ -82,8 +93,7 @@ export function detectInstalledPackageManager(probe = defaultProbe, preferred = 
 }
 
 export function resolveUpdateCommand(env = process.env) {
-  const installRoot = resolveInstallRoot(env);
-  const metaPm = readInstallMeta(installRoot)?.packageManager;
+  const metaPm = readInstallMeta(env)?.packageManager;
   const envPm = packageManagerHintFromEnv(env);
   const hintPm = isSupportedPm(metaPm) ? metaPm : (isSupportedPm(envPm) ? envPm : null);
   const detectedPm = env === process.env && !hintPm
