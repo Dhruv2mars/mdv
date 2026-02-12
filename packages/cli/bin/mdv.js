@@ -1,18 +1,25 @@
 #!/usr/bin/env node
 import { existsSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import {
+  resolveInstalledBin,
+  resolveUpdateCommand,
+  shouldRunUpdateCommand
+} from './mdv-lib.js';
 
 const args = process.argv.slice(2);
+
+if (shouldRunUpdateCommand(args)) {
+  const update = resolveUpdateCommand(process.env);
+  const res = spawnSync(update.command, update.args, { stdio: 'inherit', env: process.env });
+  process.exit(res.status ?? 1);
+}
 
 const envBin = process.env.MDV_BIN;
 if (envBin) run(envBin, args);
 
-const installRoot = process.env.MDV_INSTALL_ROOT || join(homedir(), '.mdv');
-const binName = process.platform === 'win32' ? 'mdv.exe' : 'mdv';
-const installedBin = join(installRoot, 'bin', binName);
+const installedBin = resolveInstalledBin(process.env, process.platform);
 
 if (!existsSync(installedBin)) {
   const here = fileURLToPath(new URL('.', import.meta.url));

@@ -8,7 +8,8 @@ import {
   mkdirSync,
   readFileSync,
   rmSync,
-  renameSync
+  renameSync,
+  writeFileSync
 } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';
@@ -18,7 +19,11 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import {
   assetNameFor,
+  buildChecksumMismatchHelp,
+  cachePathsFor,
   checksumsAssetNameFor,
+  computeBackoffDelay,
+  installTuningFromEnv,
   parseChecksumForAsset,
   resolveReleaseAssetBundle,
   shouldUseFallbackUrl
@@ -30,9 +35,13 @@ const installRoot = process.env.MDV_INSTALL_ROOT || join(homedir(), '.mdv');
 const binDir = join(installRoot, 'bin');
 const binName = process.platform === 'win32' ? 'mdv.exe' : 'mdv';
 const dest = join(binDir, binName);
-const retryAttempts = Number(process.env.MDV_INSTALL_RETRY_ATTEMPTS || 3);
-const timeoutMs = Number(process.env.MDV_INSTALL_TIMEOUT_MS || 15000);
-const backoffMs = Number(process.env.MDV_INSTALL_BACKOFF_MS || 250);
+const tuning = installTuningFromEnv(process.env);
+const retryAttempts = tuning.retryAttempts;
+const timeoutMs = tuning.timeoutMs;
+const backoffMs = tuning.backoffMs;
+const backoffJitterMs = tuning.backoffJitterMs;
+const debugEnabled = process.env.MDV_INSTALL_DEBUG === '1';
+const installStartedAt = Date.now();
 
 if (process.env.MDV_SKIP_DOWNLOAD === '1') process.exit(0);
 if (existsSync(dest)) process.exit(0);
@@ -42,26 +51,47 @@ mkdirSync(binDir, { recursive: true });
 const version = pkgVersion();
 const asset = assetNameFor();
 const checksumsAsset = checksumsAssetNameFor();
+const cachePaths = cachePathsFor(installRoot, version, asset, checksumsAsset);
 const url = `https://github.com/${REPO}/releases/download/v${version}/${asset}`;
 const checksumsUrl = `https://github.com/${REPO}/releases/download/v${version}/${checksumsAsset}`;
 const tmp = `${dest}.tmp-${Date.now()}`;
+mkdirSync(cachePaths.cacheDir, { recursive: true });
 
 try {
+  trace(`start retry=${retryAttempts} timeout=${timeoutMs}ms backoff=${backoffMs}ms jitter=${backoffJitterMs}ms`);
   console.error(`mdv: download ${asset} v${version}`);
-  await downloadWithFallback(
-    { binaryUrl: url, checksumsUrl },
-    version,
-    asset,
-    checksumsAsset,
-    tmp
-  );
+  let checksumsText = null;
+  const restoredFromCache = await installFromCache(cachePaths, asset, tmp);
+  if (restoredFromCache) {
+    trace('cache-hit');
+  } else {
+    trace('cache-miss');
+    const result = await downloadWithFallback(
+      { binaryUrl: url, checksumsUrl },
+      version,
+      asset,
+      checksumsAsset,
+      tmp
+    );
+    if (result.source === 'primary') {
+      checksumsText = result.checksumsText;
+    }
+  }
   if (process.platform !== 'win32') chmodSync(tmp, 0o755);
   renameSync(tmp, dest);
+  if (checksumsText) {
+    persistCache(cachePaths, checksumsText, dest);
+    trace('cache-store');
+  }
+  trace('success');
   process.exit(0);
 } catch (err) {
   try { rmSync(tmp, { force: true }); } catch {}
-
-  console.error(`mdv: download failed (${String(err)})`);
+  if (err && err.code === 'MDV_CHECKSUM_MISMATCH') {
+    console.error(`mdv: ${err.message}`);
+  } else {
+    console.error(`mdv: download failed (${String(err)})`);
+  }
 
   if (process.env.MDV_ALLOW_CARGO_FALLBACK === '1') {
     if (cargoInstallFallback()) {
@@ -170,7 +200,7 @@ async function withRetry(label, fn) {
     } catch (err) {
       lastErr = err;
       if (attempt >= retryAttempts) break;
-      await sleep(backoffMs * attempt);
+      await sleep(computeBackoffDelay(attempt, backoffMs, backoffJitterMs));
       console.error(`mdv: retry ${label} (${attempt + 1}/${retryAttempts})`);
     }
   }
@@ -201,14 +231,15 @@ async function downloadAndVerify({ binaryUrl, checksumsUrl }, asset, outPath) {
 
   const actual = await sha256File(outPath);
   if (actual !== expected) {
-    throw new Error(`checksum mismatch for ${asset}`);
+    throw checksumMismatchError(asset, expected, actual);
   }
+  return { checksumsText };
 }
 
 async function downloadWithFallback(primary, version, asset, checksumsAsset, outPath) {
   try {
-    await downloadAndVerify(primary, asset, outPath);
-    return;
+    const primaryVerified = await downloadAndVerify(primary, asset, outPath);
+    return { ...primaryVerified, source: 'primary' };
   } catch (primaryErr) {
     const fallback = await resolveReleaseAssetBundle({
       version,
@@ -222,7 +253,8 @@ async function downloadWithFallback(primary, version, asset, checksumsAsset, out
     }
 
     console.error(`mdv: fallback download ${fallback.binaryUrl}`);
-    await downloadAndVerify(fallback, asset, outPath);
+    const fallbackVerified = await downloadAndVerify(fallback, asset, outPath);
+    return { ...fallbackVerified, source: 'fallback' };
   }
 }
 
@@ -268,6 +300,60 @@ function requestJson(url) {
     });
     req.on('error', reject);
   });
+}
+
+function trace(msg) {
+  if (!debugEnabled) return;
+  const elapsed = Date.now() - installStartedAt;
+  console.error(`mdv:debug +${elapsed}ms ${msg}`);
+}
+
+async function installFromCache(paths, asset, outPath) {
+  if (!existsSync(paths.cacheBinary) || !existsSync(paths.cacheChecksums)) {
+    return false;
+  }
+
+  try {
+    const checksumsText = readFileSync(paths.cacheChecksums, 'utf8');
+    const expected = parseChecksumForAsset(checksumsText, asset);
+    if (!expected) {
+      trace('cache-invalid-missing-checksum-entry');
+      return false;
+    }
+    const actual = await sha256File(paths.cacheBinary);
+    if (actual !== expected) {
+      trace('cache-invalid-checksum-mismatch');
+      try { rmSync(paths.cacheBinary, { force: true }); } catch {}
+      try { rmSync(paths.cacheChecksums, { force: true }); } catch {}
+      return false;
+    }
+    copyFileSync(paths.cacheBinary, outPath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function persistCache(paths, checksumsText, sourceBinaryPath) {
+  try {
+    copyFileSync(sourceBinaryPath, paths.cacheBinary);
+    writeFileSync(paths.cacheChecksums, checksumsText, 'utf8');
+  } catch {
+    trace('cache-store-failed');
+  }
+}
+
+function checksumMismatchError(asset, expected, actual) {
+  const err = new Error(
+    buildChecksumMismatchHelp({
+      asset,
+      expected,
+      actual,
+      cachePath: cachePaths.cacheDir
+    })
+  );
+  err.code = 'MDV_CHECKSUM_MISMATCH';
+  return err;
 }
 
 function cargoInstallFallback() {

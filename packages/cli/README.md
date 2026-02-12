@@ -10,11 +10,18 @@ npm i -g @dhruv2mars/mdv
 
 First run downloads native `mdv` binary.
 Assets are resolved from GitHub Releases for your platform/arch.
+Installer keeps verified cache under `~/.mdv/cache`.
 
 ## Usage
 
 ```bash
 mdv README.md
+```
+
+Manual upgrade:
+
+```bash
+mdv update
 ```
 
 Stream stdin:
@@ -37,3 +44,9 @@ tail -f notes.md | mdv --stream
 - `--no-watch` disable file watch
 - `--stream` read markdown from stdin
 - `--perf` show perf stats
+
+## Installer Env
+
+- `MDV_INSTALL_DEBUG=1` local installer debug logs
+- `MDV_INSTALL_TIMEOUT_MS` request timeout (default `15000`)
+- `MDV_INSTALL_RETRY_ATTEMPTS` retries (default `3`)
