@@ -151,6 +151,52 @@ impl EditorBuffer {
         false
     }
 
+    pub fn replace_next(&mut self, needle: &str, replacement: &str) -> bool {
+        if needle.is_empty() {
+            return false;
+        }
+
+        let start = if self.cursor >= self.text.len() {
+            0
+        } else {
+            self.next_char_boundary(self.cursor)
+        };
+
+        let found = self.text[start..]
+            .find(needle)
+            .map(|offset| start + offset)
+            .or_else(|| self.text[..start].find(needle));
+
+        let Some(match_start) = found else {
+            return false;
+        };
+
+        self.push_undo_snapshot();
+        self.redo_stack.clear();
+        let match_end = match_start + needle.len();
+        self.text.replace_range(match_start..match_end, replacement);
+        self.cursor = match_start + replacement.len();
+        self.dirty = true;
+        true
+    }
+
+    pub fn replace_all(&mut self, needle: &str, replacement: &str) -> usize {
+        if needle.is_empty() {
+            return 0;
+        }
+        if !self.text.contains(needle) {
+            return 0;
+        }
+
+        let count = self.text.matches(needle).count();
+        self.push_undo_snapshot();
+        self.redo_stack.clear();
+        self.text = self.text.replace(needle, replacement);
+        self.cursor = self.text.len();
+        self.dirty = true;
+        count
+    }
+
     pub fn move_left(&mut self) {
         if self.cursor == 0 {
             return;
@@ -596,6 +642,32 @@ mod tests {
 
         assert!(!buf.find_prev("zzz"));
         assert!(!buf.find_prev(""));
+    }
+
+    #[test]
+    fn replace_next_replaces_match_and_tracks_undo() {
+        let mut buf = EditorBuffer::new("one two one".into());
+        assert!(buf.replace_next("one", "ONE"));
+        assert_eq!(buf.text(), "ONE two one");
+        assert_eq!(buf.cursor(), 3);
+        assert!(buf.dirty);
+
+        assert!(buf.undo());
+        assert_eq!(buf.text(), "one two one");
+
+        assert!(!buf.replace_next("", "x"));
+        assert!(!buf.replace_next("zzz", "x"));
+    }
+
+    #[test]
+    fn replace_all_replaces_all_matches_and_handles_empty_query() {
+        let mut buf = EditorBuffer::new("ab ab ab".into());
+        assert_eq!(buf.replace_all("ab", "xy"), 3);
+        assert_eq!(buf.text(), "xy xy xy");
+        assert_eq!(buf.cursor(), buf.text().len());
+
+        assert_eq!(buf.replace_all("", "noop"), 0);
+        assert_eq!(buf.replace_all("zzz", "noop"), 0);
     }
 
     #[test]

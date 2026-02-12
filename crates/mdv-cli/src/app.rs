@@ -46,6 +46,11 @@ pub struct App {
     last_search_query: String,
     goto_mode: bool,
     goto_query: String,
+    replace_find_mode: bool,
+    replace_find_query: String,
+    replace_with_mode: bool,
+    replace_with_query: String,
+    replace_target: String,
     selected_conflict_hunk: usize,
     preview_cache: Option<PreviewCache>,
     #[cfg(test)]
@@ -89,7 +94,7 @@ impl App {
             stream_mode: false,
             perf_mode,
             editor: EditorBuffer::new(initial_text),
-            status: "Ctrl+Q quit | Ctrl+S save | Ctrl+R reload | Ctrl+F search | F3/F3+Shift next/prev | Ctrl+G goto | Ctrl+J/Ctrl+U hunk | Ctrl+E apply hunk | Ctrl+K keep | Ctrl+M merge".into(),
+            status: "Ctrl+Q quit | Ctrl+S save | Ctrl+R reload | Ctrl+F search | F3/F3+Shift next/prev | Ctrl+H replace | Ctrl+G goto | Ctrl+J/Ctrl+U hunk | Ctrl+E apply hunk | Ctrl+K keep | Ctrl+M merge".into(),
             _watcher: watcher,
             watch_rx,
             stream_rx: None,
@@ -106,6 +111,11 @@ impl App {
             last_search_query: String::new(),
             goto_mode: false,
             goto_query: String::new(),
+            replace_find_mode: false,
+            replace_find_query: String::new(),
+            replace_with_mode: false,
+            replace_with_query: String::new(),
+            replace_target: String::new(),
             selected_conflict_hunk: 0,
             preview_cache: None,
             #[cfg(test)]
@@ -147,6 +157,11 @@ impl App {
             last_search_query: String::new(),
             goto_mode: false,
             goto_query: String::new(),
+            replace_find_mode: false,
+            replace_find_query: String::new(),
+            replace_with_mode: false,
+            replace_with_query: String::new(),
+            replace_target: String::new(),
             selected_conflict_hunk: 0,
             preview_cache: None,
             #[cfg(test)]
@@ -193,6 +208,11 @@ impl App {
             last_search_query: String::new(),
             goto_mode: false,
             goto_query: String::new(),
+            replace_find_mode: false,
+            replace_find_query: String::new(),
+            replace_with_mode: false,
+            replace_with_query: String::new(),
+            replace_target: String::new(),
             selected_conflict_hunk: 0,
             preview_cache: None,
             test_next_key: None,
@@ -335,6 +355,71 @@ impl App {
     }
 
     fn handle_key(&mut self, key: KeyEvent, running: &mut bool) -> Result<()> {
+        if self.replace_find_mode {
+            match (key.code, key.modifiers) {
+                (KeyCode::Char('q'), KeyModifiers::CONTROL) => {
+                    self.clear_replace_mode();
+                    *running = false;
+                }
+                (KeyCode::Esc, _) => {
+                    self.clear_replace_mode();
+                    self.status = "Replace cancelled".into();
+                }
+                (KeyCode::Enter, _) => {
+                    if self.replace_find_query.is_empty() {
+                        self.status = "Replace query empty".into();
+                    } else {
+                        self.replace_find_mode = false;
+                        self.replace_with_mode = true;
+                        self.replace_target = std::mem::take(&mut self.replace_find_query);
+                        self.replace_with_query.clear();
+                        self.status = "Replace with: ".into();
+                    }
+                }
+                (KeyCode::Backspace, _) => {
+                    self.replace_find_query.pop();
+                    self.status = format!("Replace find: {}", self.replace_find_query);
+                }
+                (KeyCode::Char(c), KeyModifiers::NONE | KeyModifiers::SHIFT) => {
+                    self.replace_find_query.push(c);
+                    self.status = format!("Replace find: {}", self.replace_find_query);
+                }
+                _ => {}
+            }
+            self.ensure_cursor_visible();
+            return Ok(());
+        }
+
+        if self.replace_with_mode {
+            match (key.code, key.modifiers) {
+                (KeyCode::Char('q'), KeyModifiers::CONTROL) => {
+                    self.clear_replace_mode();
+                    *running = false;
+                }
+                (KeyCode::Esc, _) => {
+                    self.clear_replace_mode();
+                    self.status = "Replace cancelled".into();
+                }
+                (KeyCode::Enter, _) => {
+                    self.apply_replace_next();
+                }
+                (KeyCode::Char('a'), KeyModifiers::CONTROL) => {
+                    self.apply_replace_all();
+                }
+                (KeyCode::Backspace, _) => {
+                    self.replace_with_query.pop();
+                    self.status = format!("Replace with: {}", self.replace_with_query);
+                }
+                (KeyCode::Char(c), KeyModifiers::NONE | KeyModifiers::SHIFT) => {
+                    self.replace_with_query.push(c);
+                    self.status = format!("Replace with: {}", self.replace_with_query);
+                }
+                _ => {}
+            }
+            self.ensure_cursor_visible();
+            return Ok(());
+        }
+
         if self.search_mode {
             match (key.code, key.modifiers) {
                 (KeyCode::Char('q'), KeyModifiers::CONTROL) => {
@@ -467,12 +552,24 @@ impl App {
             (KeyCode::Char('f'), KeyModifiers::CONTROL) => {
                 self.search_mode = true;
                 self.goto_mode = false;
+                self.clear_replace_mode();
                 self.search_query.clear();
                 self.status = "Search: ".into();
+            }
+            (KeyCode::Char('h'), KeyModifiers::CONTROL) => {
+                self.search_mode = false;
+                self.goto_mode = false;
+                self.replace_find_mode = true;
+                self.replace_with_mode = false;
+                self.replace_find_query.clear();
+                self.replace_with_query.clear();
+                self.replace_target.clear();
+                self.status = "Replace find: ".into();
             }
             (KeyCode::Char('g'), KeyModifiers::CONTROL) => {
                 self.goto_mode = true;
                 self.search_mode = false;
+                self.clear_replace_mode();
                 self.goto_query.clear();
                 self.status = "Goto: ".into();
             }
@@ -564,6 +661,61 @@ impl App {
         }
 
         self.preview_scroll = self.editor_scroll;
+    }
+
+    fn clear_replace_mode(&mut self) {
+        self.replace_find_mode = false;
+        self.replace_with_mode = false;
+        self.replace_find_query.clear();
+        self.replace_with_query.clear();
+        self.replace_target.clear();
+    }
+
+    fn apply_replace_next(&mut self) {
+        let find = self.replace_target.clone();
+        let replacement = std::mem::take(&mut self.replace_with_query);
+        self.clear_replace_mode();
+
+        if find.is_empty() {
+            self.status = "Replace query empty".into();
+            return;
+        }
+        if self.readonly {
+            self.status = "Readonly: replace disabled".into();
+            return;
+        }
+
+        if self.editor.replace_next(&find, &replacement) {
+            self.last_search_query = find.clone();
+            self.sync_conflict_hunk_selection();
+            self.status = format!("Replaced: {find} -> {replacement}");
+        } else {
+            self.status = format!("Not found: {find}");
+        }
+    }
+
+    fn apply_replace_all(&mut self) {
+        let find = self.replace_target.clone();
+        let replacement = std::mem::take(&mut self.replace_with_query);
+        self.clear_replace_mode();
+
+        if find.is_empty() {
+            self.status = "Replace query empty".into();
+            return;
+        }
+        if self.readonly {
+            self.status = "Readonly: replace disabled".into();
+            return;
+        }
+
+        let count = self.editor.replace_all(&find, &replacement);
+        if count > 0 {
+            self.last_search_query = find.clone();
+            self.sync_conflict_hunk_selection();
+            self.status = format!("Replaced all {count}: {find} -> {replacement}");
+        } else {
+            self.status = format!("Not found: {find}");
+        }
     }
 
     fn repeat_search_next(&mut self) {
@@ -1104,6 +1256,88 @@ mod tests {
     }
 
     #[test]
+    fn handle_key_replace_mode_replace_next_and_all() {
+        let path = temp_path("replace-mode");
+        fs::write(&path, "one two one").expect("seed");
+        let mut app =
+            App::new_file(path.clone(), false, false, false, "one two one".into()).expect("app");
+        app.interactive_input = false;
+        let mut running = true;
+
+        app.handle_key(key(KeyCode::Char('h'), KeyModifiers::CONTROL), &mut running)
+            .expect("start replace");
+        app.handle_key(key(KeyCode::Char('o'), KeyModifiers::NONE), &mut running)
+            .expect("find1");
+        app.handle_key(key(KeyCode::Char('n'), KeyModifiers::NONE), &mut running)
+            .expect("find2");
+        app.handle_key(key(KeyCode::Char('e'), KeyModifiers::NONE), &mut running)
+            .expect("find3");
+        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE), &mut running)
+            .expect("to replacement");
+        assert_eq!(app.status, "Replace with: ");
+
+        app.handle_key(key(KeyCode::Char('O'), KeyModifiers::SHIFT), &mut running)
+            .expect("rep1");
+        app.handle_key(key(KeyCode::Char('N'), KeyModifiers::SHIFT), &mut running)
+            .expect("rep2");
+        app.handle_key(key(KeyCode::Char('E'), KeyModifiers::SHIFT), &mut running)
+            .expect("rep3");
+        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE), &mut running)
+            .expect("replace next");
+        assert_eq!(app.editor.text(), "ONE two one");
+        assert_eq!(app.status, "Replaced: one -> ONE");
+
+        app.handle_key(key(KeyCode::Char('h'), KeyModifiers::CONTROL), &mut running)
+            .expect("start replace all");
+        app.handle_key(key(KeyCode::Char('o'), KeyModifiers::NONE), &mut running)
+            .expect("find all1");
+        app.handle_key(key(KeyCode::Char('n'), KeyModifiers::NONE), &mut running)
+            .expect("find all2");
+        app.handle_key(key(KeyCode::Char('e'), KeyModifiers::NONE), &mut running)
+            .expect("find all3");
+        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE), &mut running)
+            .expect("to replacement all");
+        app.handle_key(key(KeyCode::Char('x'), KeyModifiers::NONE), &mut running)
+            .expect("replacement all");
+        app.handle_key(key(KeyCode::Char('a'), KeyModifiers::CONTROL), &mut running)
+            .expect("replace all");
+        assert_eq!(app.editor.text(), "ONE two x");
+        assert_eq!(app.status, "Replaced all 1: one -> x");
+
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn handle_key_replace_mode_readonly_and_cancel() {
+        let path = temp_path("replace-readonly");
+        fs::write(&path, "one").expect("seed");
+        let mut app = App::new_file(path.clone(), true, false, false, "one".into()).expect("app");
+        app.interactive_input = false;
+        let mut running = true;
+
+        app.handle_key(key(KeyCode::Char('h'), KeyModifiers::CONTROL), &mut running)
+            .expect("start replace");
+        app.handle_key(key(KeyCode::Char('o'), KeyModifiers::NONE), &mut running)
+            .expect("find");
+        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE), &mut running)
+            .expect("to replacement");
+        app.handle_key(key(KeyCode::Char('x'), KeyModifiers::NONE), &mut running)
+            .expect("rep");
+        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE), &mut running)
+            .expect("replace blocked");
+        assert_eq!(app.status, "Readonly: replace disabled");
+        assert_eq!(app.editor.text(), "one");
+
+        app.handle_key(key(KeyCode::Char('h'), KeyModifiers::CONTROL), &mut running)
+            .expect("start replace 2");
+        app.handle_key(key(KeyCode::Esc, KeyModifiers::NONE), &mut running)
+            .expect("cancel replace");
+        assert_eq!(app.status, "Replace cancelled");
+
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
     fn handle_key_goto_mode() {
         let path = temp_path("goto");
         fs::write(&path, "a\nb\nc").expect("seed");
@@ -1166,6 +1400,21 @@ mod tests {
         )
         .expect("quit goto mode");
         assert!(!running2);
+
+        let mut app3 = App::new_file(path.clone(), false, false, false, "x".into()).expect("app3");
+        app3.interactive_input = false;
+        let mut running3 = true;
+        app3.handle_key(
+            key(KeyCode::Char('h'), KeyModifiers::CONTROL),
+            &mut running3,
+        )
+        .expect("replace mode");
+        app3.handle_key(
+            key(KeyCode::Char('q'), KeyModifiers::CONTROL),
+            &mut running3,
+        )
+        .expect("quit replace mode");
+        assert!(!running3);
 
         let _ = fs::remove_file(&path);
     }
@@ -1302,7 +1551,7 @@ mod tests {
         app.handle_watch_updates();
         assert_eq!(
             app.status,
-            "Ctrl+Q quit | Ctrl+S save | Ctrl+R reload | Ctrl+F search | F3/F3+Shift next/prev | Ctrl+G goto | Ctrl+J/Ctrl+U hunk | Ctrl+E apply hunk | Ctrl+K keep | Ctrl+M merge"
+            "Ctrl+Q quit | Ctrl+S save | Ctrl+R reload | Ctrl+F search | F3/F3+Shift next/prev | Ctrl+H replace | Ctrl+G goto | Ctrl+J/Ctrl+U hunk | Ctrl+E apply hunk | Ctrl+K keep | Ctrl+M merge"
         );
 
         tx.send(WatchMessage::ExternalUpdate("disk".into()))
