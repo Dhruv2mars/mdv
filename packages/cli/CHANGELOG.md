@@ -1,5 +1,11 @@
 # @dhruv2mars/mdv
 
+## 0.0.11
+
+### Patch Changes
+
+- Add Ctrl+H in-app replace prompt with replace-next and replace-all actions.
+
 ## 0.0.10
 
 ### Patch Changes
