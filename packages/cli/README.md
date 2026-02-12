@@ -9,6 +9,7 @@ npm i -g @dhruv2mars/mdv
 ```
 
 First run downloads native `mdv` binary.
+Assets are resolved from GitHub Releases for your platform/arch.
 
 ## Usage
 

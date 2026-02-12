@@ -38,6 +38,8 @@ pub struct App {
     stream_event_count: u64,
     stream_done: bool,
     interactive_input: bool,
+    #[cfg(test)]
+    test_next_key: Option<KeyEvent>,
 }
 
 impl App {
@@ -74,6 +76,8 @@ impl App {
             stream_event_count: 0,
             stream_done: false,
             interactive_input: io::stdin().is_terminal(),
+            #[cfg(test)]
+            test_next_key: None,
         })
     }
 
@@ -97,6 +101,8 @@ impl App {
             stream_event_count: 0,
             stream_done: false,
             interactive_input: io::stdin().is_terminal(),
+            #[cfg(test)]
+            test_next_key: None,
         })
     }
 
@@ -106,15 +112,11 @@ impl App {
         let backend = CrosstermBackend::new(stdout);
         let mut terminal = Terminal::new(backend)?;
 
-        if self.interactive_input {
-            enable_raw_mode()?;
-        }
+        toggle_raw_mode(self.interactive_input, enable_raw_mode)?;
 
         let loop_result = self.run_loop(&mut terminal);
 
-        if self.interactive_input {
-            disable_raw_mode()?;
-        }
+        toggle_raw_mode(self.interactive_input, disable_raw_mode)?;
         execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
         terminal.show_cursor()?;
 
@@ -136,10 +138,12 @@ impl App {
             terminal.draw(|frame| self.draw(frame))?;
             self.draw_time_us = started.elapsed().as_micros();
 
+            if !self.interactive_input && !self.stream_mode {
+                running = false;
+            }
+
             if self.interactive_input
-                && event::poll(Duration::from_millis(30))?
-                && let Event::Key(key) = event::read()?
-                && key.kind == event::KeyEventKind::Press
+                && let Some(key) = self.next_key_event()?
             {
                 self.handle_key(key, &mut running)?;
             }
@@ -294,6 +298,16 @@ impl App {
         Ok(())
     }
 
+    fn next_key_event(&mut self) -> Result<Option<KeyEvent>> {
+        #[cfg(test)]
+        {
+            if let Some(key) = self.test_next_key.take() {
+                return Ok(Some(key));
+            }
+        }
+        next_pressed_key(event::poll, event::read)
+    }
+
     fn ensure_cursor_visible(&mut self) {
         let (cursor_line, _) = self.editor.line_col_at_cursor();
         if cursor_line < self.editor_scroll {
@@ -336,11 +350,31 @@ impl App {
 
         if let Some(conflict) = self.editor.conflict() {
             preview_lines.push(String::new());
-            preview_lines.push("--- Local (unsaved) ---".into());
-            preview_lines.extend(self.editor.text().lines().map(ToString::to_string));
-            preview_lines.push(String::new());
-            preview_lines.push("--- External (updated below) ---".into());
-            preview_lines.extend(conflict.external.lines().map(ToString::to_string));
+            if conflict.hunks.is_empty() {
+                preview_lines.push("--- Local block ---".into());
+                preview_lines.extend(self.editor.text().lines().map(ToString::to_string));
+                preview_lines.push("--- External block ---".into());
+                preview_lines.extend(conflict.external.lines().map(ToString::to_string));
+            } else {
+                for hunk in &conflict.hunks {
+                    preview_lines.push(format!("--- Local block @L{} ---", hunk.local_start + 1));
+                    if hunk.local_lines.is_empty() {
+                        preview_lines.push("(no local lines)".into());
+                    } else {
+                        preview_lines.extend(hunk.local_lines.iter().cloned());
+                    }
+                    preview_lines.push(format!(
+                        "--- External block @L{} ---",
+                        hunk.external_start + 1
+                    ));
+                    if hunk.external_lines.is_empty() {
+                        preview_lines.push("(no external lines)".into());
+                    } else {
+                        preview_lines.extend(hunk.external_lines.iter().cloned());
+                    }
+                    preview_lines.push(String::new());
+                }
+            }
         }
 
         self.preview_scroll = clamp_scroll(
@@ -432,9 +466,63 @@ fn cursor_rect(area: Rect) -> Rect {
     }
 }
 
+fn toggle_raw_mode<F>(interactive: bool, mut f: F) -> Result<()>
+where
+    F: FnMut() -> io::Result<()>,
+{
+    if interactive {
+        f()?;
+    }
+    Ok(())
+}
+
+fn next_pressed_key<P, R>(mut poll: P, mut read: R) -> Result<Option<KeyEvent>>
+where
+    P: FnMut(Duration) -> io::Result<bool>,
+    R: FnMut() -> io::Result<Event>,
+{
+    if !poll(Duration::from_millis(30))? {
+        return Ok(None);
+    }
+    let event = read()?;
+    if let Event::Key(key) = event
+        && key.kind == event::KeyEventKind::Press
+    {
+        return Ok(Some(key));
+    }
+    Ok(None)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{clamp_scroll, slice_lines, status_line, to_lines};
+    use std::fs;
+    use std::path::PathBuf;
+    use std::sync::mpsc;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
+    use ratatui::Terminal;
+    use ratatui::backend::{CrosstermBackend, TestBackend};
+
+    use crate::stream::StreamMessage;
+    use crate::watcher::WatchMessage;
+
+    use super::{
+        App, clamp_scroll, cursor_rect, next_pressed_key, slice_lines, status_line, to_lines,
+        toggle_raw_mode,
+    };
+
+    fn temp_path(name: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        std::env::temp_dir().join(format!("mdv-app-test-{name}-{nanos}.md"))
+    }
+
+    fn key(code: KeyCode, modifiers: KeyModifiers) -> KeyEvent {
+        KeyEvent::new(code, modifiers)
+    }
 
     #[test]
     fn clamp_scroll_bounds() {
@@ -466,5 +554,399 @@ mod tests {
     #[test]
     fn to_lines_keeps_trailing_blank_line() {
         assert_eq!(to_lines("a\n"), vec!["a".to_string(), String::new()]);
+    }
+
+    #[test]
+    fn handle_key_save_reload_merge_and_keep() {
+        let path = temp_path("save");
+        fs::write(&path, "one").expect("seed");
+        let mut app = App::new_file(path.clone(), false, false, false, "one".into()).expect("app");
+        app.interactive_input = false;
+        let mut running = true;
+
+        app.handle_key(key(KeyCode::Char('x'), KeyModifiers::NONE), &mut running)
+            .expect("type");
+        app.handle_key(key(KeyCode::Char('s'), KeyModifiers::CONTROL), &mut running)
+            .expect("save");
+        assert_eq!(fs::read_to_string(&path).expect("saved"), "onex");
+        assert_eq!(app.status, "Saved");
+
+        app.editor.insert_char('!');
+        app.editor.on_external_change("disk".into());
+        assert!(app.editor.is_conflicted());
+        app.handle_key(key(KeyCode::Char('k'), KeyModifiers::CONTROL), &mut running)
+            .expect("keep");
+        assert_eq!(app.status, "Kept local");
+
+        app.editor.on_external_change("external".into());
+        app.handle_key(key(KeyCode::Char('m'), KeyModifiers::CONTROL), &mut running)
+            .expect("merge");
+        assert!(app.editor.text().contains("<<<<<<< local"));
+        assert_eq!(app.status, "Merged with conflict markers");
+
+        app.handle_key(key(KeyCode::Char('r'), KeyModifiers::CONTROL), &mut running)
+            .expect("reload");
+        assert_eq!(app.status, "Reloaded from disk");
+
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn handle_key_readonly_and_no_path_branches() {
+        let path = temp_path("readonly");
+        fs::write(&path, "x").expect("seed");
+        let mut app = App::new_file(path.clone(), true, false, false, "x".into()).expect("app");
+        app.interactive_input = false;
+        let mut running = true;
+
+        app.handle_key(key(KeyCode::Char('s'), KeyModifiers::CONTROL), &mut running)
+            .expect("save");
+        assert_eq!(app.status, "Readonly: save disabled");
+
+        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE), &mut running)
+            .expect("enter");
+        assert_eq!(app.editor.text(), "x");
+
+        app.handle_key(key(KeyCode::Backspace, KeyModifiers::NONE), &mut running)
+            .expect("backspace");
+        assert_eq!(app.editor.text(), "x");
+
+        let mut stream_app = App::new_stream(false).expect("stream app");
+        stream_app.readonly = false;
+        stream_app.interactive_input = false;
+        stream_app
+            .handle_key(key(KeyCode::Char('s'), KeyModifiers::CONTROL), &mut running)
+            .expect("save no path");
+        assert_eq!(stream_app.status, "No path: save disabled");
+
+        stream_app
+            .handle_key(key(KeyCode::Char('r'), KeyModifiers::CONTROL), &mut running)
+            .expect("reload stream");
+        assert_eq!(stream_app.status, "Stream mode: reload disabled");
+
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn handle_key_navigation_and_quit() {
+        let path = temp_path("nav");
+        fs::write(&path, "ab\ncd").expect("seed");
+        let mut app =
+            App::new_file(path.clone(), false, false, false, "ab\ncd".into()).expect("app");
+        app.interactive_input = false;
+        let mut running = true;
+
+        app.handle_key(key(KeyCode::Left, KeyModifiers::NONE), &mut running)
+            .expect("left");
+        app.handle_key(key(KeyCode::Right, KeyModifiers::NONE), &mut running)
+            .expect("right");
+        app.handle_key(key(KeyCode::Up, KeyModifiers::NONE), &mut running)
+            .expect("up");
+        app.handle_key(key(KeyCode::Down, KeyModifiers::NONE), &mut running)
+            .expect("down");
+        app.handle_key(key(KeyCode::PageDown, KeyModifiers::NONE), &mut running)
+            .expect("pgdn");
+        app.handle_key(key(KeyCode::PageUp, KeyModifiers::NONE), &mut running)
+            .expect("pgup");
+        app.handle_key(key(KeyCode::Char('q'), KeyModifiers::CONTROL), &mut running)
+            .expect("quit");
+        assert!(!running);
+
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn handle_watch_updates_sets_status_and_conflict() {
+        let path = temp_path("watch");
+        fs::write(&path, "local").expect("seed");
+        let mut app =
+            App::new_file(path.clone(), false, false, false, "local".into()).expect("app");
+        app.watch_enabled = true;
+        let (tx, rx) = mpsc::channel();
+        app.watch_rx = Some(rx);
+
+        tx.send(WatchMessage::ExternalUpdate("local".into()))
+            .expect("send same");
+        app.handle_watch_updates();
+        assert_eq!(
+            app.status,
+            "Ctrl+Q quit | Ctrl+S save | Ctrl+R reload | Ctrl+K keep | Ctrl+M merge"
+        );
+
+        tx.send(WatchMessage::ExternalUpdate("disk".into()))
+            .expect("send update");
+        app.handle_watch_updates();
+        assert_eq!(app.status, "File refreshed from disk");
+        assert_eq!(app.editor.text(), "disk");
+
+        app.editor.insert_char('!');
+        tx.send(WatchMessage::ExternalUpdate("disk2".into()))
+            .expect("send conflict");
+        app.handle_watch_updates();
+        assert!(app.editor.is_conflicted());
+        assert_eq!(
+            app.status,
+            "External update conflict: Ctrl+K keep | Ctrl+R reload | Ctrl+M merge"
+        );
+
+        tx.send(WatchMessage::Error("bad".into()))
+            .expect("send error");
+        app.handle_watch_updates();
+        assert!(app.status.contains("watch error"));
+
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn handle_stream_updates_sets_status() {
+        let mut app = App::new_stream(false).expect("app");
+        app.interactive_input = false;
+        let (tx, rx) = mpsc::channel();
+        app.stream_rx = Some(rx);
+
+        tx.send(StreamMessage::Update("one".into()))
+            .expect("send update");
+        app.handle_stream_updates();
+        assert_eq!(app.editor.text(), "one");
+        assert_eq!(app.status, "stream update received");
+
+        tx.send(StreamMessage::Error("e".into())).expect("send err");
+        app.handle_stream_updates();
+        assert!(app.status.contains("stream error"));
+
+        tx.send(StreamMessage::End).expect("send end");
+        app.handle_stream_updates();
+        assert!(app.stream_done);
+        assert_eq!(app.status, "stdin closed | Ctrl+Q quit");
+    }
+
+    #[test]
+    fn draw_renders_conflict_blocks() {
+        let path = temp_path("draw");
+        fs::write(&path, "a\nb").expect("seed");
+        let mut app = App::new_file(path.clone(), false, false, true, "a\nb".into()).expect("app");
+        app.editor.insert_char('!');
+        app.editor.on_external_change("a\nB\nc".into());
+        app.editor_scroll = 0;
+        app.preview_scroll = 0;
+
+        let backend = TestBackend::new(80, 20);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+        terminal.draw(|frame| app.draw(frame)).expect("draw");
+
+        let rendered = terminal.backend().buffer().content();
+        assert!(rendered.iter().any(|cell| cell.symbol() == "L"));
+        assert!(rendered.iter().any(|cell| cell.symbol() == "E"));
+
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn draw_handles_empty_hunks_branch() {
+        let path = temp_path("draw-empty");
+        fs::write(&path, "same").expect("seed");
+        let mut app = App::new_file(path.clone(), false, false, false, "same".into()).expect("app");
+        app.editor.dirty = true;
+        app.editor.on_external_change("same".into());
+
+        let backend = TestBackend::new(80, 20);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+        terminal.draw(|frame| app.draw(frame)).expect("draw");
+
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn run_loop_and_run_exit_non_interactive_file_mode() {
+        let path = temp_path("run");
+        fs::write(&path, "x").expect("seed");
+        let mut app = App::new_file(path.clone(), false, false, false, "x".into()).expect("app");
+        app.interactive_input = false;
+        let mut terminal =
+            Terminal::new(CrosstermBackend::new(std::io::stdout())).expect("terminal");
+        app.run_loop(&mut terminal).expect("run_loop");
+
+        app.interactive_input = false;
+        app.run().expect("run");
+
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn cursor_rect_offsets_inner_area() {
+        let r = cursor_rect(ratatui::layout::Rect {
+            x: 1,
+            y: 2,
+            width: 10,
+            height: 5,
+        });
+        assert_eq!(r.x, 2);
+        assert_eq!(r.y, 3);
+        assert_eq!(r.width, 8);
+        assert_eq!(r.height, 3);
+    }
+
+    #[test]
+    fn new_file_with_watcher_enabled_starts() {
+        let path = temp_path("new-watch");
+        fs::write(&path, "x").expect("seed");
+        let app = App::new_file(path.clone(), false, true, false, "x".into());
+        assert!(app.is_ok());
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn handle_watch_and_stream_none_receivers_return() {
+        let path = temp_path("none-rx");
+        fs::write(&path, "x").expect("seed");
+        let mut app = App::new_file(path.clone(), false, false, false, "x".into()).expect("app");
+        app.watch_enabled = true;
+        app.watch_rx = None;
+        app.handle_watch_updates();
+
+        let mut stream_app = App::new_stream(false).expect("app");
+        stream_app.stream_rx = None;
+        stream_app.handle_stream_updates();
+
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn handle_key_reload_conflict_branch_and_edit_keys() {
+        let path = temp_path("reload-conflict");
+        fs::write(&path, "x").expect("seed");
+        let mut app = App::new_file(path.clone(), false, false, false, "x".into()).expect("app");
+        app.editor.insert_char('!');
+        app.editor.on_external_change("disk".into());
+        let mut running = true;
+        app.handle_key(key(KeyCode::Char('r'), KeyModifiers::CONTROL), &mut running)
+            .expect("reload conflict");
+        assert_eq!(app.status, "Reloaded external");
+        assert_eq!(app.editor.text(), "disk");
+
+        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE), &mut running)
+            .expect("enter");
+        app.handle_key(key(KeyCode::Backspace, KeyModifiers::NONE), &mut running)
+            .expect("backspace");
+        app.handle_key(key(KeyCode::Tab, KeyModifiers::NONE), &mut running)
+            .expect("unknown key");
+
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn run_loop_handles_stream_done_non_interactive() {
+        let mut app = App::new_stream(false).expect("app");
+        app.interactive_input = false;
+        app.stream_done = true;
+        let mut terminal =
+            Terminal::new(CrosstermBackend::new(std::io::stdout())).expect("terminal");
+        app.run_loop(&mut terminal).expect("run loop stream done");
+    }
+
+    #[test]
+    fn toggle_raw_mode_branches() {
+        toggle_raw_mode(false, || Ok(())).expect("false branch");
+
+        let mut called = false;
+        toggle_raw_mode(true, || {
+            called = true;
+            Ok(())
+        })
+        .expect("true branch");
+        assert!(called);
+    }
+
+    #[test]
+    fn run_loop_interactive_consumes_queued_key() {
+        let path = temp_path("interactive-loop");
+        fs::write(&path, "x").expect("seed");
+        let mut app = App::new_file(path.clone(), false, false, false, "x".into()).expect("app");
+        app.interactive_input = true;
+        app.test_next_key = Some(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL));
+        let mut terminal =
+            Terminal::new(CrosstermBackend::new(std::io::stdout())).expect("terminal");
+        app.run_loop(&mut terminal).expect("run loop");
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn next_pressed_key_branches() {
+        let key = next_pressed_key(|_| Ok(false), || unreachable!()).expect("none");
+        assert!(key.is_none());
+
+        let key = next_pressed_key(|_| Ok(true), || Ok(Event::Resize(80, 24))).expect("resize");
+        assert!(key.is_none());
+
+        let key = next_pressed_key(
+            |_| Ok(true),
+            || {
+                Ok(Event::Key(KeyEvent {
+                    code: KeyCode::Char('x'),
+                    modifiers: KeyModifiers::NONE,
+                    kind: KeyEventKind::Release,
+                    state: KeyEventState::NONE,
+                }))
+            },
+        )
+        .expect("release");
+        assert!(key.is_none());
+
+        let key = next_pressed_key(
+            |_| Ok(true),
+            || {
+                Ok(Event::Key(KeyEvent::new(
+                    KeyCode::Char('q'),
+                    KeyModifiers::CONTROL,
+                )))
+            },
+        )
+        .expect("press");
+        assert!(matches!(key, Some(k) if k.code == KeyCode::Char('q')));
+    }
+
+    #[test]
+    fn next_key_event_falls_back_to_terminal_poll() {
+        let mut app = App::new_stream(false).expect("app");
+        app.test_next_key = None;
+        let _ = app.next_key_event();
+    }
+
+    #[test]
+    fn stream_update_same_text_returns_early() {
+        let mut app = App::new_stream(false).expect("app");
+        app.interactive_input = false;
+        let (tx, rx) = mpsc::channel();
+        app.stream_rx = Some(rx);
+        app.editor.on_external_change("same".into());
+        tx.send(StreamMessage::Update("same".into())).expect("send");
+        app.handle_stream_updates();
+        assert_eq!(app.editor.text(), "same");
+    }
+
+    #[test]
+    fn draw_renders_no_local_or_external_markers() {
+        let path = temp_path("draw-markers");
+        fs::write(&path, "a").expect("seed");
+
+        let mut insert_only =
+            App::new_file(path.clone(), false, false, false, "a".into()).expect("app");
+        insert_only.editor.dirty = true;
+        insert_only.editor.on_external_change("a\nb".into());
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
+        terminal
+            .draw(|frame| insert_only.draw(frame))
+            .expect("draw insert");
+
+        let mut delete_only =
+            App::new_file(path.clone(), false, false, false, "a\nb".into()).expect("app");
+        delete_only.editor.dirty = true;
+        delete_only.editor.on_external_change("a".into());
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
+        terminal
+            .draw(|frame| delete_only.draw(frame))
+            .expect("draw delete");
+
+        let _ = fs::remove_file(&path);
     }
 }

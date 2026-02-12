@@ -35,26 +35,17 @@ struct Cli {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    let force_tui = std::env::var("MDV_FORCE_TUI").ok().as_deref() == Some("1");
 
     if cli.stream {
         if cli.path.is_some() {
             bail!("path arg not allowed with --stream");
         }
 
-        if !io::stdout().is_terminal() {
+        if !io::stdout().is_terminal() && !force_tui {
             let mut buf = String::new();
             io::stdin().read_to_string(&mut buf)?;
-            let width = std::env::var("COLUMNS")
-                .ok()
-                .and_then(|v| v.parse::<u16>().ok())
-                .unwrap_or(80);
-            let lines = render_preview_lines(&buf, width);
-            for (i, line) in lines.iter().enumerate() {
-                if i > 0 {
-                    println!();
-                }
-                print!("{line}");
-            }
+            print_preview(&buf);
             return Ok(());
         }
 
@@ -67,6 +58,25 @@ fn main() -> Result<()> {
     };
 
     let text = fs::read_to_string(&path).unwrap_or_default();
+    if (!io::stdin().is_terminal() || !io::stdout().is_terminal()) && !force_tui {
+        print_preview(&text);
+        return Ok(());
+    }
+
     let mut app = app::App::new_file(path, cli.readonly, !cli.no_watch, cli.perf, text)?;
     app.run()
+}
+
+fn print_preview(text: &str) {
+    let width = std::env::var("COLUMNS")
+        .ok()
+        .and_then(|v| v.parse::<u16>().ok())
+        .unwrap_or(80);
+    let lines = render_preview_lines(text, width);
+    for (i, line) in lines.iter().enumerate() {
+        if i > 0 {
+            println!();
+        }
+        print!("{line}");
+    }
 }

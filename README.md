@@ -9,6 +9,7 @@ npm i -g @dhruv2mars/mdv
 ```
 
 First run downloads the native `mdv` binary into `~/.mdv/bin/mdv`.
+Binary artifacts are published on GitHub Releases per platform.
 
 ## Use
 
