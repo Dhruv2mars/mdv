@@ -1,5 +1,11 @@
 # @dhruv2mars/mdv
 
+## 0.0.8
+
+### Patch Changes
+
+- Ship v1 alpha gap-closure: non-tty one-shot path mode, block conflict diff UX, expanded CommonMark/GFM rendering, stronger CI perf+coverage gates, and installer/release contract checks.
+
 ## 0.0.7
 
 ### Patch Changes
