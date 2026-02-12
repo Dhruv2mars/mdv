@@ -74,7 +74,7 @@ impl App {
             stream_mode: false,
             perf_mode,
             editor: EditorBuffer::new(initial_text),
-            status: "Ctrl+Q quit | Ctrl+S save | Ctrl+R reload | Ctrl+K keep | Ctrl+M merge".into(),
+            status: "Ctrl+Q quit | Ctrl+S save | Ctrl+R reload | Ctrl+F search | Ctrl+G goto | Ctrl+K keep | Ctrl+M merge".into(),
             _watcher: watcher,
             watch_rx,
             stream_rx: None,
@@ -406,12 +406,20 @@ impl App {
                 }
             }
             (KeyCode::Char('k'), KeyModifiers::CONTROL) => {
-                self.editor.keep_local();
-                self.status = "Kept local".into();
+                if self.editor.is_conflicted() {
+                    self.editor.keep_local();
+                    self.status = "Kept local".into();
+                } else {
+                    self.status = "No conflict to keep".into();
+                }
             }
             (KeyCode::Char('m'), KeyModifiers::CONTROL) => {
-                self.editor.merge_external();
-                self.status = "Merged with conflict markers".into();
+                if self.editor.is_conflicted() {
+                    self.editor.merge_external();
+                    self.status = "Merged with conflict markers".into();
+                } else {
+                    self.status = "No conflict to merge".into();
+                }
             }
             (KeyCode::Char('f'), KeyModifiers::CONTROL) => {
                 self.search_mode = true;
@@ -939,6 +947,25 @@ mod tests {
     }
 
     #[test]
+    fn handle_key_conflict_actions_no_conflict_status() {
+        let path = temp_path("no-conflict-actions");
+        fs::write(&path, "x").expect("seed");
+        let mut app = App::new_file(path.clone(), false, false, false, "x".into()).expect("app");
+        app.interactive_input = false;
+        let mut running = true;
+
+        app.handle_key(key(KeyCode::Char('k'), KeyModifiers::CONTROL), &mut running)
+            .expect("keep");
+        assert_eq!(app.status, "No conflict to keep");
+
+        app.handle_key(key(KeyCode::Char('m'), KeyModifiers::CONTROL), &mut running)
+            .expect("merge");
+        assert_eq!(app.status, "No conflict to merge");
+
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
     fn handle_key_navigation_and_quit() {
         let path = temp_path("nav");
         fs::write(&path, "ab\ncd").expect("seed");
@@ -981,7 +1008,7 @@ mod tests {
         app.handle_watch_updates();
         assert_eq!(
             app.status,
-            "Ctrl+Q quit | Ctrl+S save | Ctrl+R reload | Ctrl+K keep | Ctrl+M merge"
+            "Ctrl+Q quit | Ctrl+S save | Ctrl+R reload | Ctrl+F search | Ctrl+G goto | Ctrl+K keep | Ctrl+M merge"
         );
 
         tx.send(WatchMessage::ExternalUpdate("disk".into()))
