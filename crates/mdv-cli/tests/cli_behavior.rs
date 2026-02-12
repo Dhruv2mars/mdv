@@ -65,12 +65,11 @@ fn stream_mode_reads_stdin_non_tty_and_exits() {
         .spawn()
         .expect("spawn mdv stream");
 
-    child
-        .stdin
-        .as_mut()
-        .expect("stdin")
-        .write_all(b"# stream\nok\n")
-        .expect("write stdin");
+    {
+        let stdin = child.stdin.as_mut().expect("stdin");
+        stdin.write_all(b"# stream\nok\n").expect("write stdin");
+    }
+    let _ = child.stdin.take();
 
     let output = wait_with_timeout(child, Duration::from_millis(1200));
     let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");

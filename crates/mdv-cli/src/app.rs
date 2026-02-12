@@ -136,6 +136,10 @@ impl App {
             terminal.draw(|frame| self.draw(frame))?;
             self.draw_time_us = started.elapsed().as_micros();
 
+            if !self.interactive_input && !self.stream_mode {
+                running = false;
+            }
+
             if self.interactive_input
                 && event::poll(Duration::from_millis(30))?
                 && let Event::Key(key) = event::read()?
