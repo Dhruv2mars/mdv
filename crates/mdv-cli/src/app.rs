@@ -40,6 +40,8 @@ pub struct App {
     stream_event_count: u64,
     stream_done: bool,
     interactive_input: bool,
+    search_mode: bool,
+    search_query: String,
     #[cfg(test)]
     test_next_key: Option<KeyEvent>,
     #[cfg(test)]
@@ -82,6 +84,8 @@ impl App {
             stream_event_count: 0,
             stream_done: false,
             interactive_input: io::stdin().is_terminal(),
+            search_mode: false,
+            search_query: String::new(),
             #[cfg(test)]
             test_next_key: None,
             #[cfg(test)]
@@ -112,6 +116,8 @@ impl App {
             stream_event_count: 0,
             stream_done: false,
             interactive_input: io::stdin().is_terminal(),
+            search_mode: false,
+            search_query: String::new(),
             #[cfg(test)]
             test_next_key: None,
             #[cfg(test)]
@@ -147,6 +153,8 @@ impl App {
             stream_event_count: 0,
             stream_done: false,
             interactive_input: false,
+            search_mode: false,
+            search_query: String::new(),
             test_next_key: None,
             test_next_key_result: None,
             test_draw_error: None,
@@ -283,6 +291,38 @@ impl App {
     }
 
     fn handle_key(&mut self, key: KeyEvent, running: &mut bool) -> Result<()> {
+        if self.search_mode {
+            match (key.code, key.modifiers) {
+                (KeyCode::Esc, _) => {
+                    self.search_mode = false;
+                    self.search_query.clear();
+                    self.status = "Search cancelled".into();
+                }
+                (KeyCode::Enter, _) => {
+                    self.search_mode = false;
+                    let query = std::mem::take(&mut self.search_query);
+                    if query.is_empty() {
+                        self.status = "Search query empty".into();
+                    } else if self.editor.find_next(&query) {
+                        self.status = format!("Found: {query}");
+                    } else {
+                        self.status = format!("Not found: {query}");
+                    }
+                }
+                (KeyCode::Backspace, _) => {
+                    self.search_query.pop();
+                    self.status = format!("Search: {}", self.search_query);
+                }
+                (KeyCode::Char(c), KeyModifiers::NONE | KeyModifiers::SHIFT) => {
+                    self.search_query.push(c);
+                    self.status = format!("Search: {}", self.search_query);
+                }
+                _ => {}
+            }
+            self.ensure_cursor_visible();
+            return Ok(());
+        }
+
         match (key.code, key.modifiers) {
             (KeyCode::Char('q'), KeyModifiers::CONTROL) => {
                 *running = false;
@@ -316,6 +356,11 @@ impl App {
             (KeyCode::Char('m'), KeyModifiers::CONTROL) => {
                 self.editor.merge_external();
                 self.status = "Merged with conflict markers".into();
+            }
+            (KeyCode::Char('f'), KeyModifiers::CONTROL) => {
+                self.search_mode = true;
+                self.search_query.clear();
+                self.status = "Search: ".into();
             }
             (KeyCode::Char('z'), KeyModifiers::CONTROL) => {
                 if self.editor.undo() {
@@ -690,6 +735,39 @@ mod tests {
             .expect("redo empty");
         assert_eq!(app.status, "Nothing to redo");
         assert_eq!(app.editor.text(), "xb");
+
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn handle_key_search_mode() {
+        let path = temp_path("search");
+        fs::write(&path, "one two one").expect("seed");
+        let mut app =
+            App::new_file(path.clone(), false, false, false, "one two one".into()).expect("app");
+        app.interactive_input = false;
+        let mut running = true;
+
+        app.handle_key(key(KeyCode::Char('f'), KeyModifiers::CONTROL), &mut running)
+            .expect("start search");
+        app.handle_key(key(KeyCode::Char('o'), KeyModifiers::NONE), &mut running)
+            .expect("q1");
+        app.handle_key(key(KeyCode::Char('n'), KeyModifiers::NONE), &mut running)
+            .expect("q2");
+        app.handle_key(key(KeyCode::Char('e'), KeyModifiers::NONE), &mut running)
+            .expect("q3");
+        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE), &mut running)
+            .expect("exec search");
+        assert_eq!(app.status, "Found: one");
+        assert_eq!(app.editor.cursor(), 0);
+
+        app.handle_key(key(KeyCode::Char('f'), KeyModifiers::CONTROL), &mut running)
+            .expect("start search 2");
+        app.handle_key(key(KeyCode::Char('z'), KeyModifiers::NONE), &mut running)
+            .expect("qz");
+        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE), &mut running)
+            .expect("exec search 2");
+        assert_eq!(app.status, "Not found: z");
 
         let _ = fs::remove_file(&path);
     }

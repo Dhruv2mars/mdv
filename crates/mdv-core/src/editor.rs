@@ -99,6 +99,30 @@ impl EditorBuffer {
         true
     }
 
+    pub fn find_next(&mut self, needle: &str) -> bool {
+        if needle.is_empty() {
+            return false;
+        }
+
+        let start = if self.cursor >= self.text.len() {
+            0
+        } else {
+            self.next_char_boundary(self.cursor)
+        };
+
+        if let Some(offset) = self.text[start..].find(needle) {
+            self.cursor = start + offset;
+            return true;
+        }
+
+        if let Some(offset) = self.text[..start].find(needle) {
+            self.cursor = offset;
+            return true;
+        }
+
+        false
+    }
+
     pub fn move_left(&mut self) {
         if self.cursor == 0 {
             return;
@@ -467,5 +491,18 @@ mod tests {
         assert_eq!(buf.text(), "abx");
         assert!(!buf.redo());
         assert_eq!(buf.text(), "abx");
+    }
+
+    #[test]
+    fn find_next_wraps_and_advances() {
+        let mut buf = EditorBuffer::new("alpha beta alpha".into());
+        assert!(buf.find_next("alpha"));
+        assert_eq!(buf.cursor(), 0);
+
+        assert!(buf.find_next("alpha"));
+        assert_eq!(buf.cursor(), 11);
+
+        assert!(!buf.find_next("zzz"));
+        assert!(!buf.find_next(""));
     }
 }
