@@ -3,7 +3,7 @@ mod stream;
 mod watcher;
 
 use std::fs;
-use std::io::{self, IsTerminal, Read};
+use std::io::{self, IsTerminal, Read, Write};
 use std::path::PathBuf;
 
 use anyhow::{Result, bail};
@@ -45,7 +45,7 @@ fn main() -> Result<()> {
         if !io::stdout().is_terminal() && !force_tui {
             let mut buf = String::new();
             io::stdin().read_to_string(&mut buf)?;
-            print_preview(&buf);
+            print_preview(&buf)?;
             return Ok(());
         }
 
@@ -57,9 +57,9 @@ fn main() -> Result<()> {
         bail!("path required unless --stream used");
     };
 
-    let text = fs::read_to_string(&path).unwrap_or_default();
+    let text = read_initial_text(&path)?;
     if (!io::stdin().is_terminal() || !io::stdout().is_terminal()) && !force_tui {
-        print_preview(&text);
+        print_preview(&text)?;
         return Ok(());
     }
 
@@ -67,15 +67,11 @@ fn main() -> Result<()> {
     app.run()
 }
 
-fn print_preview(text: &str) {
+fn print_preview(text: &str) -> io::Result<()> {
     let width = preview_width_from_env();
-    let lines = render_preview_lines(text, width);
-    for (i, line) in lines.iter().enumerate() {
-        if i > 0 {
-            println!();
-        }
-        print!("{line}");
-    }
+    let stdout = io::stdout();
+    let lock = stdout.lock();
+    print_preview_to(text, width, io::BufWriter::new(lock))
 }
 
 fn preview_width_from_env() -> u16 {
@@ -85,13 +81,44 @@ fn preview_width_from_env() -> u16 {
         .unwrap_or(80)
 }
 
+fn read_initial_text(path: &PathBuf) -> Result<String> {
+    match fs::read_to_string(path) {
+        Ok(text) => Ok(text),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(String::new()),
+        Err(err) => Err(err.into()),
+    }
+}
+
+fn print_preview_to<W: Write>(text: &str, width: u16, mut out: W) -> io::Result<()> {
+    let lines = render_preview_lines(text, width);
+    for (i, line) in lines.iter().enumerate() {
+        if i > 0 {
+            out.write_all(b"\n")?;
+        }
+        out.write_all(line.as_bytes())?;
+    }
+    out.flush()
+}
+
 #[cfg(test)]
 mod tests {
+    use std::fs;
+    use std::io;
+    use std::path::PathBuf;
     use std::sync::Mutex;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
-    use super::preview_width_from_env;
+    use super::{preview_width_from_env, print_preview_to, read_initial_text};
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    fn temp_path(name: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        std::env::temp_dir().join(format!("mdv-main-test-{name}-{nanos}.md"))
+    }
 
     #[test]
     fn preview_width_from_env_handles_valid_invalid_and_missing() {
@@ -107,5 +134,45 @@ mod tests {
         assert_eq!(preview_width_from_env(), 80);
 
         unsafe { std::env::remove_var("COLUMNS") };
+    }
+
+    #[test]
+    fn read_initial_text_allows_missing_and_errors_on_dir() {
+        let missing = temp_path("missing");
+        assert_eq!(read_initial_text(&missing).expect("missing ok"), "");
+
+        let dir = temp_path("dir");
+        fs::create_dir(&dir).expect("mkdir");
+        let err = read_initial_text(&dir).expect_err("dir err");
+        assert!(!err.to_string().is_empty());
+        let _ = fs::remove_dir(&dir);
+    }
+
+    #[test]
+    fn print_preview_to_writes_newline_separated_lines() {
+        let mut out = Vec::new();
+        print_preview_to("# a\nb\n", 80, &mut out).expect("print");
+        let s = String::from_utf8(out).expect("utf8");
+        assert_eq!(s, "# a\nb");
+
+        let mut out2 = Vec::new();
+        print_preview_to("", 80, &mut out2).expect("print2");
+        assert_eq!(String::from_utf8(out2).expect("utf8"), "");
+    }
+
+    #[test]
+    fn print_preview_to_propagates_write_errors() {
+        struct FailWriter;
+        impl io::Write for FailWriter {
+            fn write(&mut self, _buf: &[u8]) -> io::Result<usize> {
+                Err(io::Error::other("write fail"))
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let err = print_preview_to("x", 80, FailWriter).expect_err("expected write err");
+        assert!(err.to_string().contains("write fail"));
     }
 }

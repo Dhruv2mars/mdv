@@ -5,6 +5,7 @@ use std::path::Path;
 use crate::conflict_diff::{ConflictHunk, compute_conflict_hunks};
 
 const MAX_HISTORY_ENTRIES: usize = 128;
+const MAX_HISTORY_BYTES: usize = 8 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConflictState {
@@ -28,6 +29,22 @@ struct HistoryState {
     cursor: usize,
     dirty: bool,
     conflict: Option<ConflictState>,
+}
+
+impl HistoryState {
+    fn approx_bytes(&self) -> usize {
+        let mut total =
+            self.text.len() + std::mem::size_of::<usize>() + std::mem::size_of::<bool>();
+        if let Some(conflict) = &self.conflict {
+            total += conflict.external.len();
+            for h in &conflict.hunks {
+                total += 2 * std::mem::size_of::<usize>();
+                total += h.local_lines.iter().map(String::len).sum::<usize>();
+                total += h.external_lines.iter().map(String::len).sum::<usize>();
+            }
+        }
+        total
+    }
 }
 
 impl EditorBuffer {
@@ -404,6 +421,13 @@ impl EditorBuffer {
             let overflow = stack.len() - MAX_HISTORY_ENTRIES;
             stack.drain(0..overflow);
         }
+        while stack.len() > 1 && Self::history_bytes(stack) > MAX_HISTORY_BYTES {
+            stack.remove(0);
+        }
+    }
+
+    fn history_bytes(stack: &[HistoryState]) -> usize {
+        stack.iter().map(HistoryState::approx_bytes).sum()
     }
 }
 
@@ -411,7 +435,7 @@ impl EditorBuffer {
 mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use super::{EditorBuffer, MAX_HISTORY_ENTRIES};
+    use super::{EditorBuffer, MAX_HISTORY_BYTES, MAX_HISTORY_ENTRIES};
 
     fn temp_path(name: &str) -> std::path::PathBuf {
         let nanos = SystemTime::now()
@@ -726,5 +750,26 @@ mod tests {
             undo_count += 1;
         }
         assert_eq!(undo_count, MAX_HISTORY_ENTRIES);
+    }
+
+    #[test]
+    fn undo_history_is_bounded_by_total_bytes() {
+        let mut stack = Vec::new();
+        let big = "x".repeat((MAX_HISTORY_BYTES / 2).max(1024));
+        for i in 0..6 {
+            let mut text = big.clone();
+            text.push_str(&i.to_string());
+            EditorBuffer::push_history(
+                &mut stack,
+                super::HistoryState {
+                    text,
+                    cursor: 0,
+                    dirty: true,
+                    conflict: None,
+                },
+            );
+        }
+        assert!(stack.len() < 6);
+        assert!(EditorBuffer::history_bytes(&stack) <= MAX_HISTORY_BYTES || stack.len() == 1);
     }
 }

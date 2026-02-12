@@ -2,6 +2,7 @@ use std::fs;
 use std::hash::{Hash, Hasher};
 use std::io::{self, IsTerminal};
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
@@ -68,7 +69,7 @@ pub struct App {
 #[derive(Clone)]
 struct PreviewCache {
     key: u64,
-    lines: Vec<String>,
+    lines: Arc<Vec<String>>,
     selected_anchor: Option<usize>,
 }
 
@@ -321,13 +322,13 @@ impl App {
             return;
         };
 
-        let mut latest: Option<String> = None;
+        let mut latest: Option<(String, bool)> = None;
 
         while let Ok(msg) = stream_rx.try_recv() {
             self.stream_event_count += 1;
             match msg {
-                StreamMessage::Update(text) => {
-                    latest = Some(text);
+                StreamMessage::Update { text, truncated } => {
+                    latest = Some((text, truncated));
                 }
                 StreamMessage::End => {
                     self.stream_done = true;
@@ -339,7 +340,7 @@ impl App {
             }
         }
 
-        if let Some(text) = latest {
+        if let Some((text, truncated)) = latest {
             if text == self.editor.text() {
                 return;
             }
@@ -349,7 +350,11 @@ impl App {
             self.ensure_cursor_visible();
 
             if !self.stream_done {
-                self.status = "stream update received".into();
+                self.status = if truncated {
+                    "stream update received (trimmed)".into()
+                } else {
+                    "stream update received".into()
+                };
             }
         }
     }
@@ -874,7 +879,7 @@ impl App {
         hasher.finish()
     }
 
-    fn preview_lines_cached(&mut self, preview_width: u16) -> (Vec<String>, Option<usize>) {
+    fn preview_lines_cached(&mut self, preview_width: u16) -> (Arc<Vec<String>>, Option<usize>) {
         let key = self.preview_cache_key(preview_width);
         if let Some(cache) = &self.preview_cache
             && cache.key == key
@@ -883,20 +888,29 @@ impl App {
             {
                 self.test_preview_cache_hits += 1;
             }
-            return (cache.lines.clone(), cache.selected_anchor);
+            return (Arc::clone(&cache.lines), cache.selected_anchor);
         }
 
         let (lines, selected_anchor) = self.build_preview_lines(preview_width);
         self.preview_cache = Some(PreviewCache {
             key,
-            lines: lines.clone(),
+            lines: Arc::new(lines),
             selected_anchor,
         });
         #[cfg(test)]
         {
             self.test_preview_cache_misses += 1;
         }
-        (lines, selected_anchor)
+        (
+            Arc::clone(
+                &self
+                    .preview_cache
+                    .as_ref()
+                    .expect("preview cache populated")
+                    .lines,
+            ),
+            selected_anchor,
+        )
     }
 
     fn draw(&mut self, frame: &mut Frame<'_>) {
@@ -942,8 +956,11 @@ impl App {
             preview_height.max(1),
         );
 
-        let preview_visible =
-            slice_lines(&preview_lines, self.preview_scroll, preview_height.max(1));
+        let preview_visible = slice_lines(
+            preview_lines.as_ref(),
+            self.preview_scroll,
+            preview_height.max(1),
+        );
 
         let preview = Paragraph::new(preview_visible)
             .block(Block::default().borders(Borders::ALL).title("Preview"));
@@ -1585,8 +1602,11 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         app.stream_rx = Some(rx);
 
-        tx.send(StreamMessage::Update("one".into()))
-            .expect("send update");
+        tx.send(StreamMessage::Update {
+            text: "one".into(),
+            truncated: false,
+        })
+        .expect("send update");
         app.handle_stream_updates();
         assert_eq!(app.editor.text(), "one");
         assert_eq!(app.status, "stream update received");
@@ -1599,6 +1619,23 @@ mod tests {
         app.handle_stream_updates();
         assert!(app.stream_done);
         assert_eq!(app.status, "stdin closed | Ctrl+Q quit");
+    }
+
+    #[test]
+    fn handle_stream_updates_sets_truncated_status() {
+        let mut app = App::new_stream_for_test(false);
+        app.interactive_input = false;
+        let (tx, rx) = mpsc::channel();
+        app.stream_rx = Some(rx);
+
+        tx.send(StreamMessage::Update {
+            text: "trimmed".into(),
+            truncated: true,
+        })
+        .expect("send update");
+        app.handle_stream_updates();
+        assert_eq!(app.editor.text(), "trimmed");
+        assert_eq!(app.status, "stream update received (trimmed)");
     }
 
     #[test]
@@ -1936,7 +1973,11 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         app.stream_rx = Some(rx);
         app.editor.on_external_change("same".into());
-        tx.send(StreamMessage::Update("same".into())).expect("send");
+        tx.send(StreamMessage::Update {
+            text: "same".into(),
+            truncated: false,
+        })
+        .expect("send");
         app.handle_stream_updates();
         assert_eq!(app.editor.text(), "same");
     }
@@ -1988,6 +2029,17 @@ mod tests {
         terminal.draw(|frame| app.draw(frame)).expect("third draw");
         assert_eq!(app.test_preview_cache_misses, 2);
 
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn preview_cache_reuses_arc_on_cache_hit() {
+        let path = temp_path("preview-cache-arc");
+        fs::write(&path, "one").expect("seed");
+        let mut app = App::new_file(path.clone(), false, false, false, "one".into()).expect("app");
+        let (first, _) = app.preview_lines_cached(40);
+        let (second, _) = app.preview_lines_cached(40);
+        assert!(std::sync::Arc::ptr_eq(&first, &second));
         let _ = fs::remove_file(&path);
     }
 }
