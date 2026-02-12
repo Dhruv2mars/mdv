@@ -1,5 +1,11 @@
 # @dhruv2mars/mdv
 
+## 0.0.9
+
+### Patch Changes
+
+- Release v0.0.9 with editor workflow upgrades and markdown rendering improvements.
+
 ## 0.0.8
 
 ### Patch Changes
