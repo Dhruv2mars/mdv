@@ -107,8 +107,16 @@ jobs:
       - name: Build release binary
         run: cargo build -p mdv-cli --release
 
-      - name: CLI p95 perf gate
+      - name: CLI p95 perf gate (200KB)
         run: node scripts/perf-smoke.mjs
+
+      - name: CLI p95 perf gate (1MB)
+        run: |
+          MDV_PERF_FIXTURE_BYTES=1048576 \
+          MDV_PERF_RUNS=20 \
+          MDV_PERF_BUDGET_MS=500 \
+          MDV_PERF_SUMMARY=/tmp/mdv-perf-summary-large.txt \
+          node scripts/perf-smoke.mjs
 
       - name: Core render p95 perf gate
         run: cargo test -p mdv-core --release --test perf -- --ignored
@@ -117,4 +125,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: perf-smoke-summary
-          path: /tmp/mdv-perf-summary.txt
+          path: |
+            /tmp/mdv-perf-summary.txt
+            /tmp/mdv-perf-summary-large.txt
