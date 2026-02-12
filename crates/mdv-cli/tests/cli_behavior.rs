@@ -31,6 +31,15 @@ fn temp_file(name: &str, content: &str) -> PathBuf {
     path
 }
 
+fn large_markdown_fixture(target_bytes: usize) -> String {
+    let row = "## heading\n- item alpha\n- item beta\n`inline`\n\n";
+    let mut out = String::from("# large fixture\n");
+    while out.len() < target_bytes {
+        out.push_str(row);
+    }
+    out
+}
+
 fn wait_with_timeout(mut child: std::process::Child, timeout: Duration) -> Output {
     let started = std::time::Instant::now();
     loop {
@@ -101,6 +110,26 @@ fn path_mode_non_tty_renders_once_and_exits() {
     );
     assert!(stdout.contains("# Title"), "stdout: {stdout}");
     assert!(stdout.contains("body"), "stdout: {stdout}");
+}
+
+#[test]
+fn path_mode_non_tty_large_file_exits() {
+    let content = large_markdown_fixture(1024 * 1024);
+    let path = temp_file("non-tty-large", &content);
+    let child = mdv_cmd()
+        .arg(&path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn mdv");
+
+    let output = wait_with_timeout(child, Duration::from_millis(4000));
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 #[test]
