@@ -1,5 +1,11 @@
 # @dhruv2mars/mdv
 
+## 0.0.12
+
+### Patch Changes
+
+- Polish markdown math and footnote rendering with deterministic delimiters.
+
 ## 0.0.11
 
 ### Patch Changes
