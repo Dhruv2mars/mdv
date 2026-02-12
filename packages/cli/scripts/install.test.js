@@ -14,6 +14,7 @@ import {
   computeBackoffDelay,
   findAssetUrl,
   installTuningFromEnv,
+  packageManagerHintFromEnv,
   parseChecksumForAsset,
   resolveReleaseAssetBundle,
   resolveReleaseAssetUrl,
@@ -255,6 +256,22 @@ test('buildChecksumMismatchHelp gives actionable recovery steps', () => {
 
   assert.match(msg, /checksum mismatch for mdv-linux-x64/);
   assert.match(msg, /rm -rf \/tmp\/mdv\/cache\/v0.1.0/);
+});
+
+test('packageManagerHintFromEnv detects execpath and user-agent', () => {
+  assert.equal(
+    packageManagerHintFromEnv({
+      npm_execpath: '/Users/a/.local/share/pnpm/pnpm.cjs'
+    }),
+    'pnpm'
+  );
+  assert.equal(
+    packageManagerHintFromEnv({
+      npm_config_user_agent: 'bun/1.3.5 npm/? node/v22.0.0'
+    }),
+    'bun'
+  );
+  assert.equal(packageManagerHintFromEnv({}), null);
 });
 
 test('package has minimal user README', () => {

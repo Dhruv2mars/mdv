@@ -23,6 +23,7 @@ Manual upgrade:
 ```bash
 mdv update
 ```
+Uses detected install manager (bun/pnpm/yarn/npm), prefers original installer metadata.
 
 Stream stdin:
 
