@@ -36,6 +36,11 @@ fn wait_with_timeout(mut child: std::process::Child, timeout: Duration) -> Outpu
     }
 }
 
+#[cfg(target_os = "linux")]
+fn sh_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\"'\"'"))
+}
+
 #[test]
 fn path_mode_non_tty_renders_once_and_exits() {
     let path = temp_file("non-tty", "# Title\nbody\n");
@@ -84,6 +89,28 @@ fn stream_mode_reads_stdin_non_tty_and_exits() {
     );
     assert!(stdout.contains("# stream"), "stdout: {stdout}");
     assert!(stdout.contains("ok"), "stdout: {stdout}");
+}
+
+#[test]
+fn stream_mode_invalid_utf8_hits_error_path_and_exits() {
+    let mut child = Command::new(mdv_bin())
+        .arg("--stream")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn mdv stream");
+
+    {
+        let stdin = child.stdin.as_mut().expect("stdin");
+        stdin.write_all(&[0xff, b'\n']).expect("write invalid utf8");
+    }
+    let _ = child.stdin.take();
+
+    let output = wait_with_timeout(child, Duration::from_millis(1200));
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("valid UTF-8"), "stderr: {}", stderr);
 }
 
 #[test]
@@ -154,6 +181,61 @@ fn stream_mode_force_tui_exits_after_stdin_close() {
     }
     let _ = child.stdin.take();
     let output = wait_with_timeout(child, Duration::from_millis(1200));
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn stream_mode_force_tui_invalid_utf8_hits_stream_error_branch() {
+    let mut child = Command::new(mdv_bin())
+        .arg("--stream")
+        .env("MDV_FORCE_TUI", "1")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn mdv");
+    {
+        let stdin = child.stdin.as_mut().expect("stdin");
+        stdin.write_all(&[0xff, b'\n']).expect("write");
+    }
+    let _ = child.stdin.take();
+    thread::sleep(Duration::from_millis(600));
+    let _ = child.kill();
+    let output = wait_with_timeout(child, Duration::from_secs(2));
+    assert!(!output.status.success());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn linux_force_tui_interactive_exits_on_ctrl_q() {
+    let path = temp_file("linux-interactive", "# title\nx");
+    let command = format!(
+        "{} {}",
+        sh_quote(mdv_bin()),
+        sh_quote(&path.to_string_lossy())
+    );
+    let mut child = Command::new("script")
+        .arg("-qfec")
+        .arg(command)
+        .arg("/dev/null")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn script");
+
+    thread::sleep(Duration::from_millis(150));
+    {
+        let stdin = child.stdin.as_mut().expect("stdin");
+        stdin.write_all(&[0x11]).expect("write ctrl+q");
+    }
+    let _ = child.stdin.take();
+
+    let output = wait_with_timeout(child, Duration::from_secs(3));
     assert!(
         output.status.success(),
         "stderr: {}",

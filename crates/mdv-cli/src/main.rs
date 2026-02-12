@@ -68,15 +68,44 @@ fn main() -> Result<()> {
 }
 
 fn print_preview(text: &str) {
-    let width = std::env::var("COLUMNS")
-        .ok()
-        .and_then(|v| v.parse::<u16>().ok())
-        .unwrap_or(80);
+    let width = preview_width_from_env();
     let lines = render_preview_lines(text, width);
     for (i, line) in lines.iter().enumerate() {
         if i > 0 {
             println!();
         }
         print!("{line}");
+    }
+}
+
+fn preview_width_from_env() -> u16 {
+    std::env::var("COLUMNS")
+        .ok()
+        .and_then(|v| v.parse::<u16>().ok())
+        .unwrap_or(80)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Mutex;
+
+    use super::preview_width_from_env;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn preview_width_from_env_handles_valid_invalid_and_missing() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
+
+        unsafe { std::env::remove_var("COLUMNS") };
+        assert_eq!(preview_width_from_env(), 80);
+
+        unsafe { std::env::set_var("COLUMNS", "120") };
+        assert_eq!(preview_width_from_env(), 120);
+
+        unsafe { std::env::set_var("COLUMNS", "oops") };
+        assert_eq!(preview_width_from_env(), 80);
+
+        unsafe { std::env::remove_var("COLUMNS") };
     }
 }

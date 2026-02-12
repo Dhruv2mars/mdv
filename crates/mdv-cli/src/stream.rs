@@ -71,15 +71,11 @@ mod tests {
 
         read_loop(&mut reader, &tx);
 
-        assert!(matches!(
-            rx.recv().expect("msg1"),
-            StreamMessage::Update(ref s) if s == "a\n"
-        ));
-        assert!(matches!(
-            rx.recv().expect("msg2"),
-            StreamMessage::Update(ref s) if s == "a\nb\n"
-        ));
-        assert!(matches!(rx.recv().expect("msg3"), StreamMessage::End));
+        let messages: Vec<_> = rx.try_iter().collect();
+        assert_eq!(messages.len(), 3);
+        assert_eq!(format!("{:?}", messages[0]), "Update(\"a\\n\")");
+        assert_eq!(format!("{:?}", messages[1]), "Update(\"a\\nb\\n\")");
+        assert_eq!(format!("{:?}", messages[2]), "End");
     }
 
     #[test]
@@ -88,7 +84,7 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         read_loop(&mut reader, &tx);
 
-        let msg = rx.recv().expect("msg");
+        let msg = rx.try_iter().next().expect("msg");
         assert!(matches!(msg, StreamMessage::Error(err) if err.contains("boom")));
     }
 

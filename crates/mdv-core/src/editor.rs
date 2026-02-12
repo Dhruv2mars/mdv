@@ -207,7 +207,17 @@ impl EditorBuffer {
 
 #[cfg(test)]
 mod tests {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
     use super::EditorBuffer;
+
+    fn temp_path(name: &str) -> std::path::PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        std::env::temp_dir().join(format!("mdv-editor-test-{name}-{nanos}.md"))
+    }
 
     #[test]
     fn insert_and_backspace_work() {
@@ -327,5 +337,38 @@ mod tests {
         let mut buf = EditorBuffer::new("x".into());
         buf.merge_external();
         assert_eq!(buf.text(), "x");
+    }
+
+    #[test]
+    fn reload_external_noop_when_not_conflicted() {
+        let mut buf = EditorBuffer::new("x".into());
+        buf.reload_external();
+        assert_eq!(buf.text(), "x");
+    }
+
+    #[test]
+    fn save_to_path_persists_text_and_clears_state() {
+        let path = temp_path("save");
+        let mut buf = EditorBuffer::new("a".into());
+        buf.insert_char('b');
+        buf.on_external_change("external".into());
+        assert!(buf.is_conflicted());
+
+        buf.save_to_path(&path).expect("save");
+        assert_eq!(std::fs::read_to_string(&path).expect("read"), "ab");
+        assert!(!buf.dirty);
+        assert!(!buf.is_conflicted());
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn save_to_path_returns_error_for_directory() {
+        let path = temp_path("save-dir");
+        std::fs::create_dir(&path).expect("mkdir");
+        let mut buf = EditorBuffer::new("abc".into());
+        let err = buf.save_to_path(&path).expect_err("save error");
+        assert!(!err.to_string().is_empty());
+        let _ = std::fs::remove_dir(&path);
     }
 }
