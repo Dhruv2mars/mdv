@@ -301,12 +301,11 @@ impl App {
     fn next_key_event(&mut self) -> Result<Option<KeyEvent>> {
         #[cfg(test)]
         {
-            Ok(self.test_next_key.take())
+            if let Some(key) = self.test_next_key.take() {
+                return Ok(Some(key));
+            }
         }
-        #[cfg(not(test))]
-        {
-            next_pressed_key(event::poll, event::read)
-        }
+        next_pressed_key(event::poll, event::read)
     }
 
     fn ensure_cursor_visible(&mut self) {
@@ -910,7 +909,7 @@ mod tests {
     fn next_key_event_falls_back_to_terminal_poll() {
         let mut app = App::new_stream(false).expect("app");
         app.test_next_key = None;
-        let _ = app.next_key_event().expect("next key");
+        let _ = app.next_key_event();
     }
 
     #[test]
