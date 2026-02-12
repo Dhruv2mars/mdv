@@ -7,7 +7,7 @@ use std::io::{self, IsTerminal, Read, Write};
 use std::path::PathBuf;
 
 use anyhow::{Result, bail};
-use clap::Parser;
+use clap::{CommandFactory, Parser};
 use mdv_core::render_preview_lines;
 
 #[derive(Debug, Parser)]
@@ -54,7 +54,10 @@ fn main() -> Result<()> {
     }
 
     let Some(path) = cli.path else {
-        bail!("path required unless --stream used");
+        let mut cmd = Cli::command();
+        cmd.print_help()?;
+        println!();
+        return Ok(());
     };
 
     let text = read_initial_text(&path)?;
