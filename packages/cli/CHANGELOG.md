@@ -1,5 +1,11 @@
 # @dhruv2mars/mdv
 
+## 0.0.18
+
+### Patch Changes
+
+- Fix stale global binary drift: launcher/installer now enforce installed binary version == package version.
+
 ## 0.0.17
 
 ### Patch Changes
