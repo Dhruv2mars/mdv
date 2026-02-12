@@ -40,3 +40,29 @@ fn editor_conflict_state_contains_block_hunks() {
         vec!["TWO".to_string(), "three".to_string(), "four".to_string()]
     );
 }
+
+#[test]
+fn editor_cursor_accessor_reports_byte_index() {
+    let mut editor = EditorBuffer::new("ab".into());
+    editor.move_left();
+    assert_eq!(editor.cursor(), 1);
+}
+
+#[test]
+fn editor_save_to_path_success_and_error_paths() {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("clock")
+        .as_nanos();
+
+    let ok_path = std::env::temp_dir().join(format!("mdv-core-save-ok-{nanos}.md"));
+    let mut editor = EditorBuffer::new("save".into());
+    editor.save_to_path(&ok_path).expect("save ok");
+    let _ = std::fs::remove_file(&ok_path);
+
+    let err_path = std::env::temp_dir().join(format!("mdv-core-save-dir-{nanos}"));
+    std::fs::create_dir(&err_path).expect("mkdir");
+    let err = editor.save_to_path(&err_path).expect_err("save err");
+    assert!(!err.to_string().is_empty());
+    let _ = std::fs::remove_dir(&err_path);
+}

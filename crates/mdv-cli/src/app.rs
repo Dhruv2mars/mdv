@@ -40,6 +40,10 @@ pub struct App {
     interactive_input: bool,
     #[cfg(test)]
     test_next_key: Option<KeyEvent>,
+    #[cfg(test)]
+    test_next_key_result: Option<io::Result<Option<KeyEvent>>>,
+    #[cfg(test)]
+    test_draw_error: Option<io::Error>,
 }
 
 impl App {
@@ -78,6 +82,10 @@ impl App {
             interactive_input: io::stdin().is_terminal(),
             #[cfg(test)]
             test_next_key: None,
+            #[cfg(test)]
+            test_next_key_result: None,
+            #[cfg(test)]
+            test_draw_error: None,
         })
     }
 
@@ -103,6 +111,10 @@ impl App {
             interactive_input: io::stdin().is_terminal(),
             #[cfg(test)]
             test_next_key: None,
+            #[cfg(test)]
+            test_next_key_result: None,
+            #[cfg(test)]
+            test_draw_error: None,
         })
     }
 
@@ -135,6 +147,10 @@ impl App {
             }
 
             let started = Instant::now();
+            #[cfg(test)]
+            if let Some(err) = self.test_draw_error.take() {
+                return Err(err.into());
+            }
             terminal.draw(|frame| self.draw(frame))?;
             self.draw_time_us = started.elapsed().as_micros();
 
@@ -301,6 +317,9 @@ impl App {
     fn next_key_event(&mut self) -> Result<Option<KeyEvent>> {
         #[cfg(test)]
         {
+            if let Some(result) = self.test_next_key_result.take() {
+                return result.map_err(Into::into);
+            }
             if let Some(key) = self.test_next_key.take() {
                 return Ok(Some(key));
             }
@@ -496,6 +515,7 @@ where
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::io;
     use std::path::PathBuf;
     use std::sync::mpsc;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -764,6 +784,7 @@ mod tests {
         app.interactive_input = false;
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
         app.run_loop(&mut terminal).expect("run_loop");
+        let _ = app.run();
 
         let _ = fs::remove_file(&path);
     }
@@ -789,6 +810,13 @@ mod tests {
         let app = App::new_file(path.clone(), false, true, false, "x".into());
         assert!(app.is_ok());
         let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn new_file_with_watcher_enabled_returns_error_for_missing_path() {
+        let path = temp_path("new-watch-missing");
+        let app = App::new_file(path, false, true, false, String::new());
+        assert!(app.is_err());
     }
 
     #[test]
@@ -827,6 +855,13 @@ mod tests {
         app.handle_key(key(KeyCode::Tab, KeyModifiers::NONE), &mut running)
             .expect("unknown key");
 
+        // Exercise branch where reload is requested with no path and not stream mode.
+        let mut no_path = App::new_stream(false).expect("stream app");
+        no_path.stream_mode = false;
+        no_path
+            .handle_key(key(KeyCode::Char('r'), KeyModifiers::CONTROL), &mut running)
+            .expect("reload no-path no-stream");
+
         let _ = fs::remove_file(&path);
     }
 
@@ -840,19 +875,6 @@ mod tests {
     }
 
     #[test]
-    fn toggle_raw_mode_branches() {
-        toggle_raw_mode(false, || Ok(())).expect("false branch");
-
-        let mut called = false;
-        toggle_raw_mode(true, || {
-            called = true;
-            Ok(())
-        })
-        .expect("true branch");
-        assert!(called);
-    }
-
-    #[test]
     fn run_loop_interactive_consumes_queued_key() {
         let path = temp_path("interactive-loop");
         fs::write(&path, "x").expect("seed");
@@ -862,6 +884,50 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
         app.run_loop(&mut terminal).expect("run loop");
         let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn run_loop_propagates_draw_error() {
+        let path = temp_path("draw-error");
+        fs::write(&path, "x").expect("seed");
+        let mut app = App::new_file(path.clone(), false, false, false, "x".into()).expect("app");
+        app.interactive_input = false;
+        app.test_draw_error = Some(io::Error::other("draw failed"));
+
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
+        let err = app.run_loop(&mut terminal).expect_err("draw error");
+        assert!(err.to_string().contains("draw failed"));
+
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn run_loop_propagates_next_key_event_error() {
+        let path = temp_path("next-key-error");
+        fs::write(&path, "x").expect("seed");
+        let mut app = App::new_file(path.clone(), false, false, false, "x".into()).expect("app");
+        app.interactive_input = true;
+        app.test_next_key_result = Some(Err(io::Error::other("poll failed")));
+
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
+        let err = app.run_loop(&mut terminal).expect_err("next key error");
+        assert!(err.to_string().contains("poll failed"));
+
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn run_loop_propagates_handle_key_save_error() {
+        let path = temp_path("save-dir");
+        fs::create_dir(&path).expect("mkdir");
+        let mut app = App::new_file(path.clone(), false, false, false, "x".into()).expect("app");
+        app.interactive_input = true;
+        app.test_next_key = Some(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
+
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
+        assert!(app.run_loop(&mut terminal).is_err());
+
+        let _ = fs::remove_dir(&path);
     }
 
     #[test]
@@ -904,6 +970,58 @@ mod tests {
         let mut app = App::new_stream(false).expect("app");
         app.test_next_key = None;
         let _ = app.next_key_event();
+    }
+
+    #[test]
+    fn next_pressed_key_read_error_branch() {
+        let err = next_pressed_key(|_| Ok(true), || Err(io::Error::other("read failed")))
+            .expect_err("read error");
+        assert!(err.to_string().contains("read failed"));
+    }
+
+    #[test]
+    fn handle_key_shift_char_inserts() {
+        let path = temp_path("shift-char");
+        fs::write(&path, "x").expect("seed");
+        let mut app = App::new_file(path.clone(), false, false, false, "x".into()).expect("app");
+        let mut running = true;
+        app.handle_key(key(KeyCode::Char('A'), KeyModifiers::SHIFT), &mut running)
+            .expect("shift char");
+        assert_eq!(app.editor.text(), "xA");
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn draw_sets_cursor_when_visible() {
+        let path = temp_path("draw-cursor");
+        fs::write(&path, "x").expect("seed");
+        let mut app = App::new_file(path.clone(), false, false, false, "x".into()).expect("app");
+        app.editor_scroll = 0;
+        app.preview_scroll = 0;
+
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
+        terminal.draw(|frame| app.draw(frame)).expect("draw");
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn toggle_raw_mode_propagates_error() {
+        let err = toggle_raw_mode(true, || Err(io::Error::other("raw mode failed")))
+            .expect_err("expected error");
+        assert!(err.to_string().contains("raw mode failed"));
+    }
+
+    #[test]
+    fn toggle_raw_mode_success_branches() {
+        toggle_raw_mode(false, || Ok(())).expect("false branch");
+
+        let mut called = false;
+        toggle_raw_mode(true, || {
+            called = true;
+            Ok(())
+        })
+        .expect("true branch");
+        assert!(called);
     }
 
     #[test]

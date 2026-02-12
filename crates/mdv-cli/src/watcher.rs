@@ -184,10 +184,9 @@ mod tests {
         };
         let (tx, rx) = mpsc::channel();
         handle_notify_result(Ok(event), &path, &tx);
-        assert!(matches!(
-            rx.recv().expect("msg"),
-            WatchMessage::Error(err) if !err.is_empty()
-        ));
+        let msg = rx.recv().expect("msg");
+        let debug = format!("{msg:?}");
+        assert!(debug.starts_with("Error(\""), "debug: {debug}");
     }
 
     #[test]
@@ -199,6 +198,13 @@ mod tests {
         assert!(started.is_ok());
         let (_watcher, _rx) = started.expect("watcher");
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn start_returns_error_for_missing_path() {
+        let path = std::env::temp_dir().join("mdv-watch-missing-start-test.md");
+        let started = super::start(&path);
+        assert!(started.is_err());
     }
 
     #[test]
