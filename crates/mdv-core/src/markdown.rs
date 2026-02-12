@@ -1,51 +1,294 @@
-use pulldown_cmark::{Event, HeadingLevel, Parser, Tag, TagEnd};
+use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
+
+#[derive(Debug, Clone)]
+struct ListState {
+    ordered: bool,
+    next_index: usize,
+}
+
+#[derive(Debug, Clone)]
+enum LinkState {
+    Link { text: String, dest: String },
+    Image { alt: String, dest: String },
+}
+
+struct Renderer {
+    width: usize,
+    lines: Vec<String>,
+    current: String,
+    blockquote_depth: usize,
+    pending_prefix: Option<String>,
+    list_stack: Vec<ListState>,
+    link_stack: Vec<LinkState>,
+    in_code_block: bool,
+    table_head_needs_separator: bool,
+    in_table_cell: bool,
+    table_row: Vec<String>,
+    table_cell: String,
+}
+
+impl Renderer {
+    fn new(width: usize) -> Self {
+        Self {
+            width,
+            lines: Vec::new(),
+            current: String::new(),
+            blockquote_depth: 0,
+            pending_prefix: None,
+            list_stack: Vec::new(),
+            link_stack: Vec::new(),
+            in_code_block: false,
+            table_head_needs_separator: false,
+            in_table_cell: false,
+            table_row: Vec::new(),
+            table_cell: String::new(),
+        }
+    }
+
+    fn quote_prefix(&self) -> String {
+        "> ".repeat(self.blockquote_depth)
+    }
+
+    fn take_line_prefix(&mut self) -> String {
+        let mut prefix = self.quote_prefix();
+        if let Some(item_prefix) = self.pending_prefix.take() {
+            prefix.push_str(&item_prefix);
+        }
+        prefix
+    }
+
+    fn append_text(&mut self, text: &str) {
+        if let Some(link) = self.link_stack.last_mut() {
+            match link {
+                LinkState::Link { text: inner, .. } => inner.push_str(text),
+                LinkState::Image { alt, .. } => alt.push_str(text),
+            }
+            return;
+        }
+
+        if self.in_table_cell {
+            self.table_cell.push_str(text);
+            return;
+        }
+
+        if self.current.is_empty() {
+            let prefix = self.take_line_prefix();
+            self.current.push_str(&prefix);
+        }
+        self.current.push_str(text);
+    }
+
+    fn flush_current(&mut self) {
+        if self.current.is_empty() {
+            return;
+        }
+        let line = std::mem::take(&mut self.current);
+        for wrapped in wrap_line(&line, self.width) {
+            self.lines.push(wrapped);
+        }
+    }
+
+    fn push_line(&mut self, line: String) {
+        self.flush_current();
+        for wrapped in wrap_line(&line, self.width) {
+            self.lines.push(wrapped);
+        }
+    }
+
+    fn push_code_text(&mut self, text: &str) {
+        let mut chunks = text.split('\n').peekable();
+        while let Some(chunk) = chunks.next() {
+            if chunk.is_empty() && chunks.peek().is_none() {
+                break;
+            }
+            let mut line = self.quote_prefix();
+            line.push_str(chunk);
+            self.push_line(line);
+        }
+    }
+}
 
 pub fn render_preview_lines(markdown: &str, width: u16) -> Vec<String> {
-    let mut lines = Vec::<String>::new();
-    let mut current = String::new();
     let max_width = width.max(8) as usize;
+    let mut renderer = Renderer::new(max_width);
+    let mut options = Options::empty();
+    options.insert(Options::ENABLE_TABLES);
+    options.insert(Options::ENABLE_TASKLISTS);
+    options.insert(Options::ENABLE_STRIKETHROUGH);
 
-    for event in Parser::new(markdown) {
+    for event in Parser::new_ext(markdown, options) {
         match event {
-            Event::Start(Tag::Heading { level, .. }) => {
-                flush_current(&mut current, &mut lines, max_width);
-                current.push_str(heading_prefix(level));
-            }
-            Event::End(TagEnd::Heading(_)) => {
-                flush_current(&mut current, &mut lines, max_width);
-            }
-            Event::Start(Tag::Item) => {
-                flush_current(&mut current, &mut lines, max_width);
-                current.push_str("- ");
-            }
-            Event::End(TagEnd::Item) => {
-                flush_current(&mut current, &mut lines, max_width);
-            }
-            Event::TaskListMarker(done) => {
-                current.push_str(if done { "[x] " } else { "[ ] " });
-            }
-            Event::Code(code) => {
-                current.push('`');
-                current.push_str(&code);
-                current.push('`');
-            }
+            Event::Start(tag) => match tag {
+                Tag::Heading { level, .. } => {
+                    renderer.flush_current();
+                    renderer.append_text(heading_prefix(level));
+                }
+                Tag::BlockQuote(_) => {
+                    renderer.flush_current();
+                    renderer.blockquote_depth += 1;
+                }
+                Tag::List(start) => {
+                    renderer.flush_current();
+                    renderer.list_stack.push(ListState {
+                        ordered: start.is_some(),
+                        next_index: start.unwrap_or(1) as usize,
+                    });
+                }
+                Tag::Item => {
+                    renderer.flush_current();
+                    let prefix = if let Some(list) = renderer.list_stack.last_mut() {
+                        if list.ordered {
+                            let p = format!("{}. ", list.next_index);
+                            list.next_index += 1;
+                            p
+                        } else {
+                            "- ".to_string()
+                        }
+                    } else {
+                        "- ".to_string()
+                    };
+                    renderer.pending_prefix = Some(prefix);
+                }
+                Tag::CodeBlock(kind) => {
+                    renderer.flush_current();
+                    renderer.in_code_block = true;
+                    let mut fence = renderer.quote_prefix();
+                    fence.push_str("```");
+                    if let CodeBlockKind::Fenced(lang) = kind {
+                        let lang = lang.trim();
+                        if !lang.is_empty() {
+                            fence.push_str(lang);
+                        }
+                    }
+                    renderer.push_line(fence);
+                }
+                Tag::Table(_) => {
+                    renderer.flush_current();
+                }
+                Tag::TableHead => {
+                    renderer.flush_current();
+                    renderer.table_head_needs_separator = true;
+                }
+                Tag::TableRow => {
+                    renderer.flush_current();
+                    renderer.table_row.clear();
+                }
+                Tag::TableCell => {
+                    renderer.in_table_cell = true;
+                    renderer.table_cell.clear();
+                }
+                Tag::Link { dest_url, .. } => {
+                    renderer.link_stack.push(LinkState::Link {
+                        text: String::new(),
+                        dest: dest_url.to_string(),
+                    });
+                }
+                Tag::Image { dest_url, .. } => {
+                    renderer.link_stack.push(LinkState::Image {
+                        alt: String::new(),
+                        dest: dest_url.to_string(),
+                    });
+                }
+                _ => {}
+            },
+            Event::End(tag_end) => match tag_end {
+                TagEnd::Heading(_) | TagEnd::Paragraph => renderer.flush_current(),
+                TagEnd::BlockQuote(_) => {
+                    renderer.flush_current();
+                    renderer.blockquote_depth = renderer.blockquote_depth.saturating_sub(1);
+                }
+                TagEnd::List(_) => {
+                    renderer.flush_current();
+                    renderer.list_stack.pop();
+                }
+                TagEnd::Item => renderer.flush_current(),
+                TagEnd::CodeBlock => {
+                    renderer.flush_current();
+                    renderer.in_code_block = false;
+                    let mut fence = renderer.quote_prefix();
+                    fence.push_str("```");
+                    renderer.push_line(fence);
+                }
+                TagEnd::TableHead => {
+                    if renderer.table_head_needs_separator && !renderer.table_row.is_empty() {
+                        let row = format!("| {} |", renderer.table_row.join(" | "));
+                        let mut line = renderer.quote_prefix();
+                        line.push_str(&row);
+                        renderer.push_line(line);
+
+                        let sep =
+                            format!("| {} |", vec!["-"; renderer.table_row.len()].join(" | "));
+                        let mut sep_line = renderer.quote_prefix();
+                        sep_line.push_str(&sep);
+                        renderer.push_line(sep_line);
+
+                        renderer.table_row.clear();
+                        renderer.table_head_needs_separator = false;
+                    }
+                }
+                TagEnd::TableRow => {
+                    let row = format!("| {} |", renderer.table_row.join(" | "));
+                    let mut line = renderer.quote_prefix();
+                    line.push_str(&row);
+                    renderer.push_line(line);
+                    if renderer.table_head_needs_separator {
+                        let sep = format!("| {} |", vec!["-"; renderer.table_row.len()].join(" | "));
+                        let mut sep_line = renderer.quote_prefix();
+                        sep_line.push_str(&sep);
+                        renderer.push_line(sep_line);
+                        renderer.table_head_needs_separator = false;
+                    }
+                }
+                TagEnd::TableCell => {
+                    renderer.in_table_cell = false;
+                    renderer.table_row.push(renderer.table_cell.clone());
+                    renderer.table_cell.clear();
+                }
+                TagEnd::Link => {
+                    if let Some(LinkState::Link { text, dest }) = renderer.link_stack.pop() {
+                        renderer.append_text(&format!("[{text}]({dest})"));
+                    }
+                }
+                TagEnd::Image => {
+                    if let Some(LinkState::Image { alt, dest }) = renderer.link_stack.pop() {
+                        renderer.append_text(&format!("![{alt}]({dest})"));
+                    }
+                }
+                _ => {}
+            },
             Event::Text(text) => {
-                current.push_str(&text);
+                if renderer.in_code_block {
+                    renderer.push_code_text(&text);
+                } else {
+                    renderer.append_text(&text);
+                }
             }
-            Event::SoftBreak | Event::HardBreak => {
-                flush_current(&mut current, &mut lines, max_width);
+            Event::Code(code) => renderer.append_text(&format!("`{code}`")),
+            Event::SoftBreak => {
+                if renderer.link_stack.last().is_some() {
+                    renderer.append_text(" ");
+                } else {
+                    renderer.flush_current();
+                }
             }
+            Event::HardBreak => renderer.flush_current(),
+            Event::TaskListMarker(done) => renderer.append_text(if done { "[x] " } else { "[ ] " }),
+            Event::Rule => {
+                renderer.flush_current();
+                let mut line = renderer.quote_prefix();
+                line.push_str("---");
+                renderer.push_line(line);
+            }
+            Event::Html(html) | Event::InlineHtml(html) => renderer.append_text(&html),
             _ => {}
         }
     }
 
-    flush_current(&mut current, &mut lines, max_width);
-
-    if lines.is_empty() {
-        lines.push(String::new());
+    renderer.flush_current();
+    if renderer.lines.is_empty() {
+        renderer.lines.push(String::new());
     }
-
-    lines
+    renderer.lines
 }
 
 fn heading_prefix(level: HeadingLevel) -> &'static str {
@@ -57,18 +300,6 @@ fn heading_prefix(level: HeadingLevel) -> &'static str {
         HeadingLevel::H5 => "##### ",
         HeadingLevel::H6 => "###### ",
     }
-}
-
-fn flush_current(current: &mut String, lines: &mut Vec<String>, width: usize) {
-    if current.is_empty() {
-        return;
-    }
-
-    for wrapped in wrap_line(current, width) {
-        lines.push(wrapped);
-    }
-
-    current.clear();
 }
 
 fn wrap_line(input: &str, width: usize) -> Vec<String> {
@@ -149,5 +380,12 @@ mod tests {
         assert_eq!(lines[3], "| a | b |");
         assert_eq!(lines[4], "| - | - |");
         assert_eq!(lines[5], "| 1 | 2 |");
+    }
+
+    #[test]
+    fn renders_inline_code_and_strike_text_fallback() {
+        let src = "a `code` and ~~gone~~";
+        let lines = render_preview_lines(src, 80);
+        assert_eq!(lines, vec!["a `code` and gone"]);
     }
 }
