@@ -16,7 +16,8 @@ Core diff: very fast startup/render/scroll, in-app edit, realtime file sync.
 - Primary install: npm.
 - Package name: `@dhruv2mars/mdv`.
 - Binary command exposed as: `mdv`.
-- Ship prebuilt Rust binaries per platform via npm packages.
+- Build prebuilt Rust binaries per platform in GitHub Releases.
+- npm package installs lightweight launcher; first run downloads matching release asset.
 
 ## CI/CD
 - Use GitHub Actions.
