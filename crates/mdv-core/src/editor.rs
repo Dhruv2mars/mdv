@@ -180,9 +180,6 @@ impl EditorBuffer {
                 }
                 line += 1;
                 col = 0;
-                if line > target_line {
-                    return idx;
-                }
             } else {
                 col += 1;
             }
@@ -287,5 +284,48 @@ mod tests {
         buf.move_down();
         let (_, col_down) = buf.line_col_at_cursor();
         assert_eq!(col_before, col_down);
+    }
+
+    #[test]
+    fn no_op_movement_and_backspace_at_edges() {
+        let mut buf = EditorBuffer::new(String::new());
+        assert_eq!(buf.cursor(), 0);
+        buf.backspace();
+        buf.move_left();
+        buf.move_right();
+        buf.move_up();
+        buf.move_down();
+        assert_eq!(buf.cursor(), 0);
+    }
+
+    #[test]
+    fn insert_newline_and_unicode_movement() {
+        let mut buf = EditorBuffer::new("é".into());
+        buf.insert_newline();
+        assert_eq!(buf.text(), "é\n");
+        buf.move_left();
+        buf.move_left();
+        assert_eq!(buf.cursor(), 0);
+        buf.move_right();
+        assert_eq!(buf.cursor(), "é".len());
+    }
+
+    #[test]
+    fn move_up_to_shorter_line_clamps_to_newline() {
+        let mut buf = EditorBuffer::new("x\nlonger".into());
+        buf.move_left();
+        buf.move_left();
+        buf.move_left();
+        buf.move_up();
+        let (line, col) = buf.line_col_at_cursor();
+        assert_eq!(line, 0);
+        assert_eq!(col, 1);
+    }
+
+    #[test]
+    fn merge_external_noop_when_not_conflicted() {
+        let mut buf = EditorBuffer::new("x".into());
+        buf.merge_external();
+        assert_eq!(buf.text(), "x");
     }
 }

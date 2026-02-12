@@ -115,6 +115,8 @@ pub fn render_preview_lines(markdown: &str, width: u16) -> Vec<String> {
     options.insert(Options::ENABLE_TABLES);
     options.insert(Options::ENABLE_TASKLISTS);
     options.insert(Options::ENABLE_STRIKETHROUGH);
+    options.insert(Options::ENABLE_FOOTNOTES);
+    options.insert(Options::ENABLE_MATH);
 
     for event in Parser::new_ext(markdown, options) {
         match event {
@@ -136,14 +138,14 @@ pub fn render_preview_lines(markdown: &str, width: u16) -> Vec<String> {
                 }
                 Tag::Item => {
                     renderer.flush_current();
-                    let prefix = if let Some(list) = renderer.list_stack.last_mut() {
-                        if list.ordered {
-                            let p = format!("{}. ", list.next_index);
-                            list.next_index += 1;
-                            p
-                        } else {
-                            "- ".to_string()
-                        }
+                    let list = renderer
+                        .list_stack
+                        .last_mut()
+                        .expect("pulldown-cmark item outside list");
+                    let prefix = if list.ordered {
+                        let p = format!("{}. ", list.next_index);
+                        list.next_index += 1;
+                        p
                     } else {
                         "- ".to_string()
                     };
@@ -231,13 +233,6 @@ pub fn render_preview_lines(markdown: &str, width: u16) -> Vec<String> {
                     let mut line = renderer.quote_prefix();
                     line.push_str(&row);
                     renderer.push_line(line);
-                    if renderer.table_head_needs_separator {
-                        let sep = format!("| {} |", vec!["-"; renderer.table_row.len()].join(" | "));
-                        let mut sep_line = renderer.quote_prefix();
-                        sep_line.push_str(&sep);
-                        renderer.push_line(sep_line);
-                        renderer.table_head_needs_separator = false;
-                    }
                 }
                 TagEnd::TableCell => {
                     renderer.in_table_cell = false;
@@ -280,7 +275,8 @@ pub fn render_preview_lines(markdown: &str, width: u16) -> Vec<String> {
                 renderer.push_line(line);
             }
             Event::Html(html) | Event::InlineHtml(html) => renderer.append_text(&html),
-            _ => {}
+            Event::FootnoteReference(name) => renderer.append_text(&name),
+            Event::InlineMath(math) | Event::DisplayMath(math) => renderer.append_text(&math),
         }
     }
 
@@ -387,5 +383,43 @@ mod tests {
         let src = "a `code` and ~~gone~~";
         let lines = render_preview_lines(src, 80);
         assert_eq!(lines, vec!["a `code` and gone"]);
+    }
+
+    #[test]
+    fn renders_empty_input_as_single_blank_line() {
+        let lines = render_preview_lines("", 80);
+        assert_eq!(lines, vec![String::new()]);
+    }
+
+    #[test]
+    fn renders_hard_break_softbreak_in_link_and_html() {
+        let src = "[line1\nline2](https://x)\nA\\\nB\n<div>x</div>";
+        let lines = render_preview_lines(src, 80);
+        assert_eq!(lines[0], "[line1 line2](https://x)");
+        assert_eq!(lines[1], "A");
+        assert_eq!(lines[2], "B");
+        assert_eq!(lines[3], "<div>x</div>");
+    }
+
+    #[test]
+    fn renders_indented_code_and_heading_levels() {
+        let src = "## h2\n### h3\n#### h4\n##### h5\n###### h6\n\n    code";
+        let lines = render_preview_lines(src, 80);
+        assert_eq!(lines[0], "## h2");
+        assert_eq!(lines[1], "### h3");
+        assert_eq!(lines[2], "#### h4");
+        assert_eq!(lines[3], "##### h5");
+        assert_eq!(lines[4], "###### h6");
+        assert_eq!(lines[5], "```");
+        assert_eq!(lines[6], "code");
+        assert_eq!(lines[7], "```");
+    }
+
+    #[test]
+    fn renders_footnote_and_math_events() {
+        let src = "x[^n]\n\n[^n]: note\n\n$y$";
+        let lines = render_preview_lines(src, 80);
+        assert!(lines.join("\n").contains("note"));
+        assert!(lines.join("\n").contains("y"));
     }
 }

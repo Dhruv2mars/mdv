@@ -1,6 +1,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{self, Receiver};
+use std::sync::mpsc::{self, Receiver, Sender};
 
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher, recommended_watcher};
 
@@ -14,7 +14,20 @@ pub fn start(path: &Path) -> notify::Result<(RecommendedWatcher, Receiver<WatchM
     let watched_path = path.to_path_buf();
     let (tx, rx) = mpsc::channel();
 
-    let mut watcher = recommended_watcher(move |result: notify::Result<Event>| match result {
+    let mut watcher = recommended_watcher(move |result: notify::Result<Event>| {
+        handle_notify_result(result, &watched_path, &tx)
+    })?;
+
+    watcher.watch(path, RecursiveMode::NonRecursive)?;
+    Ok((watcher, rx))
+}
+
+fn handle_notify_result(
+    result: notify::Result<Event>,
+    watched_path: &Path,
+    tx: &Sender<WatchMessage>,
+) {
+    match result {
         Ok(event) => {
             if !is_relevant(&event.kind) {
                 return;
@@ -23,12 +36,12 @@ pub fn start(path: &Path) -> notify::Result<(RecommendedWatcher, Receiver<WatchM
             if !event
                 .paths
                 .iter()
-                .any(|event_path| same_file(event_path, &watched_path))
+                .any(|event_path| same_file(event_path, watched_path))
             {
                 return;
             }
 
-            match fs::read_to_string(&watched_path) {
+            match fs::read_to_string(watched_path) {
                 Ok(content) => {
                     let _ = tx.send(WatchMessage::ExternalUpdate(content));
                 }
@@ -40,10 +53,7 @@ pub fn start(path: &Path) -> notify::Result<(RecommendedWatcher, Receiver<WatchM
         Err(err) => {
             let _ = tx.send(WatchMessage::Error(err.to_string()));
         }
-    })?;
-
-    watcher.watch(path, RecursiveMode::NonRecursive)?;
-    Ok((watcher, rx))
+    }
 }
 
 fn is_relevant(kind: &EventKind) -> bool {
@@ -69,10 +79,13 @@ fn canonical(path: &Path) -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::mpsc;
+
+    use notify::Event;
     use notify::EventKind;
     use notify::event::{CreateKind, ModifyKind};
 
-    use super::{is_relevant, same_file};
+    use super::{WatchMessage, handle_notify_result, is_relevant, same_file};
 
     #[test]
     fn relevant_event_filter_works() {
@@ -93,6 +106,127 @@ mod tests {
         std::fs::write(&path, "x").expect("seed");
         assert!(same_file(&path, &path));
         assert!(same_file(&path, &alternate));
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn handle_notify_result_sends_update() {
+        let dir = std::env::temp_dir();
+        let path = dir.join("mdv-watch-update-test.md");
+        std::fs::write(&path, "new").expect("seed");
+        let event = Event {
+            kind: EventKind::Modify(ModifyKind::Any),
+            paths: vec![path.clone()],
+            attrs: Default::default(),
+        };
+        let (tx, rx) = mpsc::channel();
+
+        handle_notify_result(Ok(event), &path, &tx);
+
+        assert!(matches!(
+            rx.recv().expect("msg"),
+            WatchMessage::ExternalUpdate(text) if text == "new"
+        ));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn handle_notify_result_sends_error_on_notify_error() {
+        let path = std::env::temp_dir().join("mdv-watch-error-test.md");
+        let (tx, rx) = mpsc::channel();
+        handle_notify_result(Err(notify::Error::generic("watch failed")), &path, &tx);
+
+        assert!(matches!(
+            rx.recv().expect("msg"),
+            WatchMessage::Error(err) if err.contains("watch failed")
+        ));
+    }
+
+    #[test]
+    fn handle_notify_result_ignores_irrelevant_or_other_path() {
+        let dir = std::env::temp_dir();
+        let path = dir.join("mdv-watch-ignore-test.md");
+        std::fs::write(&path, "x").expect("seed");
+        let other = dir.join("mdv-watch-ignore-test-other.md");
+        std::fs::write(&other, "y").expect("seed other");
+
+        let irrelevant = Event {
+            kind: EventKind::Access(notify::event::AccessKind::Any),
+            paths: vec![path.clone()],
+            attrs: Default::default(),
+        };
+        let mismatched = Event {
+            kind: EventKind::Modify(ModifyKind::Any),
+            paths: vec![other.clone()],
+            attrs: Default::default(),
+        };
+
+        let (tx, rx) = mpsc::channel();
+        handle_notify_result(Ok(irrelevant), &path, &tx);
+        handle_notify_result(Ok(mismatched), &path, &tx);
+        assert!(rx.try_recv().is_err());
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&other);
+    }
+
+    #[test]
+    fn handle_notify_result_sends_read_error() {
+        let dir = std::env::temp_dir();
+        let path = dir.join("mdv-watch-read-error-test.md");
+        std::fs::write(&path, "x").expect("seed");
+        std::fs::remove_file(&path).expect("remove");
+        let event = Event {
+            kind: EventKind::Modify(ModifyKind::Any),
+            paths: vec![path.clone()],
+            attrs: Default::default(),
+        };
+        let (tx, rx) = mpsc::channel();
+        handle_notify_result(Ok(event), &path, &tx);
+        assert!(matches!(
+            rx.recv().expect("msg"),
+            WatchMessage::Error(err) if !err.is_empty()
+        ));
+    }
+
+    #[test]
+    fn start_initializes_watcher() {
+        let dir = std::env::temp_dir();
+        let path = dir.join("mdv-watch-start-test.md");
+        std::fs::write(&path, "x").expect("seed");
+        let started = super::start(&path);
+        assert!(started.is_ok());
+        let (_watcher, _rx) = started.expect("watcher");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn start_callback_emits_update_after_write() {
+        let dir = std::env::temp_dir();
+        let path = dir.join("mdv-watch-callback-test.md");
+        std::fs::write(&path, "a").expect("seed");
+        let (_watcher, rx) = super::start(&path).expect("start");
+        let path_for_thread = path.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(250));
+            std::fs::write(&path_for_thread, "c").expect("intermediate update");
+            std::thread::sleep(std::time::Duration::from_millis(120));
+            std::fs::write(&path_for_thread, "b").expect("update");
+        });
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        let mut saw_update = false;
+        while std::time::Instant::now() < deadline {
+            let Ok(msg) = rx.recv_timeout(std::time::Duration::from_millis(50)) else {
+                continue;
+            };
+            if matches!(msg, WatchMessage::ExternalUpdate(text) if text == "b") {
+                saw_update = true;
+                break;
+            }
+        }
+        assert!(saw_update, "did not receive updated content");
 
         let _ = std::fs::remove_file(&path);
     }

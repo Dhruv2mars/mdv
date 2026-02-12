@@ -35,13 +35,14 @@ struct Cli {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    let force_tui = std::env::var("MDV_FORCE_TUI").ok().as_deref() == Some("1");
 
     if cli.stream {
         if cli.path.is_some() {
             bail!("path arg not allowed with --stream");
         }
 
-        if !io::stdout().is_terminal() {
+        if !io::stdout().is_terminal() && !force_tui {
             let mut buf = String::new();
             io::stdin().read_to_string(&mut buf)?;
             print_preview(&buf);
@@ -57,7 +58,7 @@ fn main() -> Result<()> {
     };
 
     let text = fs::read_to_string(&path).unwrap_or_default();
-    if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
+    if (!io::stdin().is_terminal() || !io::stdout().is_terminal()) && !force_tui {
         print_preview(&text);
         return Ok(());
     }

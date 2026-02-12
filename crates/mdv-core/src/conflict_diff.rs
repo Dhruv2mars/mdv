@@ -134,4 +134,14 @@ mod tests {
         assert!(hunks[1].local_lines.is_empty());
         assert_eq!(hunks[1].external_lines, vec!["d".to_string()]);
     }
+
+    #[test]
+    fn returns_trailing_delete_hunk() {
+        let hunks = compute_conflict_hunks("a\nb\nc", "a");
+        assert_eq!(hunks.len(), 1);
+        assert_eq!(hunks[0].local_start, 1);
+        assert_eq!(hunks[0].external_start, 1);
+        assert_eq!(hunks[0].local_lines, vec!["b".to_string(), "c".to_string()]);
+        assert!(hunks[0].external_lines.is_empty());
+    }
 }

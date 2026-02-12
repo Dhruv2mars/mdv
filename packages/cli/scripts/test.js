@@ -4,13 +4,22 @@ import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const unit = spawnSync(process.execPath, ['--test', join(fileURLToPath(new URL('.', import.meta.url)), 'install.test.js')], {
+const testsDir = fileURLToPath(new URL('.', import.meta.url));
+const unit = spawnSync(
+  process.execPath,
+  [
+    '--test',
+    join(testsDir, 'install.test.js'),
+    join(testsDir, 'release-contract.test.js')
+  ],
+  {
   stdio: 'inherit',
   env: process.env
-});
+}
+);
 if (unit.status !== 0) process.exit(unit.status ?? 1);
 
-const here = fileURLToPath(new URL('.', import.meta.url));
+const here = testsDir;
 const cliDir = join(here, '..');
 const repo = join(cliDir, '..', '..');
 
