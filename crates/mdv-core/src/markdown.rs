@@ -120,4 +120,34 @@ mod tests {
         let lines = render_preview_lines(src, 4);
         assert_eq!(lines, vec!["abcdefgh", "ij"]);
     }
+
+    #[test]
+    fn renders_blockquote_and_ordered_list() {
+        let src = "> quoted\n\n1. first\n2. second";
+        let lines = render_preview_lines(src, 80);
+        assert_eq!(lines[0], "> quoted");
+        assert_eq!(lines[1], "1. first");
+        assert_eq!(lines[2], "2. second");
+    }
+
+    #[test]
+    fn renders_link_image_and_thematic_break() {
+        let src = "[site](https://example.com)\n\n![alt](img.png)\n\n---";
+        let lines = render_preview_lines(src, 80);
+        assert_eq!(lines[0], "[site](https://example.com)");
+        assert_eq!(lines[1], "![alt](img.png)");
+        assert_eq!(lines[2], "---");
+    }
+
+    #[test]
+    fn renders_fenced_code_and_table_rows() {
+        let src = "```rs\nlet x = 1;\n```\n\n| a | b |\n| - | - |\n| 1 | 2 |";
+        let lines = render_preview_lines(src, 80);
+        assert_eq!(lines[0], "```rs");
+        assert_eq!(lines[1], "let x = 1;");
+        assert_eq!(lines[2], "```");
+        assert_eq!(lines[3], "| a | b |");
+        assert_eq!(lines[4], "| - | - |");
+        assert_eq!(lines[5], "| 1 | 2 |");
+    }
 }
