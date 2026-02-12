@@ -42,6 +42,8 @@ pub struct App {
     interactive_input: bool,
     search_mode: bool,
     search_query: String,
+    goto_mode: bool,
+    goto_query: String,
     #[cfg(test)]
     test_next_key: Option<KeyEvent>,
     #[cfg(test)]
@@ -86,6 +88,8 @@ impl App {
             interactive_input: io::stdin().is_terminal(),
             search_mode: false,
             search_query: String::new(),
+            goto_mode: false,
+            goto_query: String::new(),
             #[cfg(test)]
             test_next_key: None,
             #[cfg(test)]
@@ -118,6 +122,8 @@ impl App {
             interactive_input: io::stdin().is_terminal(),
             search_mode: false,
             search_query: String::new(),
+            goto_mode: false,
+            goto_query: String::new(),
             #[cfg(test)]
             test_next_key: None,
             #[cfg(test)]
@@ -155,6 +161,8 @@ impl App {
             interactive_input: false,
             search_mode: false,
             search_query: String::new(),
+            goto_mode: false,
+            goto_query: String::new(),
             test_next_key: None,
             test_next_key_result: None,
             test_draw_error: None,
@@ -293,6 +301,11 @@ impl App {
     fn handle_key(&mut self, key: KeyEvent, running: &mut bool) -> Result<()> {
         if self.search_mode {
             match (key.code, key.modifiers) {
+                (KeyCode::Char('q'), KeyModifiers::CONTROL) => {
+                    self.search_mode = false;
+                    self.search_query.clear();
+                    *running = false;
+                }
                 (KeyCode::Esc, _) => {
                     self.search_mode = false;
                     self.search_query.clear();
@@ -316,6 +329,49 @@ impl App {
                 (KeyCode::Char(c), KeyModifiers::NONE | KeyModifiers::SHIFT) => {
                     self.search_query.push(c);
                     self.status = format!("Search: {}", self.search_query);
+                }
+                _ => {}
+            }
+            self.ensure_cursor_visible();
+            return Ok(());
+        }
+
+        if self.goto_mode {
+            match (key.code, key.modifiers) {
+                (KeyCode::Char('q'), KeyModifiers::CONTROL) => {
+                    self.goto_mode = false;
+                    self.goto_query.clear();
+                    *running = false;
+                }
+                (KeyCode::Esc, _) => {
+                    self.goto_mode = false;
+                    self.goto_query.clear();
+                    self.status = "Goto cancelled".into();
+                }
+                (KeyCode::Enter, _) => {
+                    self.goto_mode = false;
+                    let query = std::mem::take(&mut self.goto_query);
+                    if query.is_empty() {
+                        self.status = "Goto line empty".into();
+                    } else if let Ok(line_number) = query.parse::<usize>() {
+                        if self.editor.goto_line(line_number) {
+                            self.status = format!("Line {line_number}");
+                        } else {
+                            self.status = format!("Line out of range: {query}");
+                        }
+                    } else {
+                        self.status = format!("Line out of range: {query}");
+                    }
+                }
+                (KeyCode::Backspace, _) => {
+                    self.goto_query.pop();
+                    self.status = format!("Goto: {}", self.goto_query);
+                }
+                (KeyCode::Char(c), KeyModifiers::NONE | KeyModifiers::SHIFT) => {
+                    if c.is_ascii_digit() {
+                        self.goto_query.push(c);
+                        self.status = format!("Goto: {}", self.goto_query);
+                    }
                 }
                 _ => {}
             }
@@ -359,8 +415,15 @@ impl App {
             }
             (KeyCode::Char('f'), KeyModifiers::CONTROL) => {
                 self.search_mode = true;
+                self.goto_mode = false;
                 self.search_query.clear();
                 self.status = "Search: ".into();
+            }
+            (KeyCode::Char('g'), KeyModifiers::CONTROL) => {
+                self.goto_mode = true;
+                self.search_mode = false;
+                self.goto_query.clear();
+                self.status = "Goto: ".into();
             }
             (KeyCode::Char('z'), KeyModifiers::CONTROL) => {
                 if self.editor.undo() {
@@ -768,6 +831,73 @@ mod tests {
         app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE), &mut running)
             .expect("exec search 2");
         assert_eq!(app.status, "Not found: z");
+
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn handle_key_goto_mode() {
+        let path = temp_path("goto");
+        fs::write(&path, "a\nb\nc").expect("seed");
+        let mut app =
+            App::new_file(path.clone(), false, false, false, "a\nb\nc".into()).expect("app");
+        app.interactive_input = false;
+        let mut running = true;
+
+        app.handle_key(key(KeyCode::Char('g'), KeyModifiers::CONTROL), &mut running)
+            .expect("start goto");
+        app.handle_key(key(KeyCode::Char('2'), KeyModifiers::NONE), &mut running)
+            .expect("line");
+        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE), &mut running)
+            .expect("exec goto");
+        assert_eq!(app.editor.line_col_at_cursor(), (1, 0));
+        assert_eq!(app.status, "Line 2");
+
+        app.handle_key(key(KeyCode::Char('g'), KeyModifiers::CONTROL), &mut running)
+            .expect("start goto 2");
+        app.handle_key(key(KeyCode::Char('9'), KeyModifiers::NONE), &mut running)
+            .expect("line 9");
+        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE), &mut running)
+            .expect("exec goto 2");
+        assert_eq!(app.status, "Line out of range: 9");
+
+        app.handle_key(key(KeyCode::Char('g'), KeyModifiers::CONTROL), &mut running)
+            .expect("start goto 3");
+        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE), &mut running)
+            .expect("exec goto 3");
+        assert_eq!(app.status, "Goto line empty");
+
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn handle_key_quit_works_in_prompt_modes() {
+        let path = temp_path("quit-prompts");
+        fs::write(&path, "x").expect("seed");
+        let mut app = App::new_file(path.clone(), false, false, false, "x".into()).expect("app");
+        app.interactive_input = false;
+        let mut running = true;
+
+        app.handle_key(key(KeyCode::Char('f'), KeyModifiers::CONTROL), &mut running)
+            .expect("search mode");
+        app.handle_key(key(KeyCode::Char('q'), KeyModifiers::CONTROL), &mut running)
+            .expect("quit search mode");
+        assert!(!running);
+
+        let mut app2 = App::new_file(path.clone(), false, false, false, "x".into()).expect("app2");
+        app2.interactive_input = false;
+        let mut running2 = true;
+        app2.handle_key(
+            key(KeyCode::Char('g'), KeyModifiers::CONTROL),
+            &mut running2,
+        )
+        .expect("goto mode");
+        app2.handle_key(
+            key(KeyCode::Char('q'), KeyModifiers::CONTROL),
+            &mut running2,
+        )
+        .expect("quit goto mode");
+        assert!(!running2);
 
         let _ = fs::remove_file(&path);
     }
