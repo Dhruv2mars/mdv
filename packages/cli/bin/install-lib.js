@@ -5,9 +5,19 @@ export function assetNameFor(platform = process.platform, arch = process.arch) {
 
 export function findAssetUrl(release, asset) {
   if (!release || !Array.isArray(release.assets)) return null;
-  const match = release.assets.find((item) => item?.name === asset);
-  if (!match) return null;
-  return match.browser_download_url || null;
+  for (const item of release.assets) {
+    if (item?.name !== asset) continue;
+    if (typeof item.browser_download_url === 'string' && item.browser_download_url.length > 0) {
+      return item.browser_download_url;
+    }
+  }
+  return null;
+}
+
+export function shouldUseFallbackUrl(primaryUrl, fallbackUrl) {
+  if (typeof fallbackUrl !== 'string' || fallbackUrl.length === 0) return false;
+  if (typeof primaryUrl !== 'string' || primaryUrl.length === 0) return true;
+  return fallbackUrl !== primaryUrl;
 }
 
 export async function resolveReleaseAssetUrl({ version, asset, getRelease }) {

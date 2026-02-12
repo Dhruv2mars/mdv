@@ -14,7 +14,7 @@ import { join } from 'node:path';
 import https from 'node:https';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { assetNameFor, resolveReleaseAssetUrl } from './install-lib.js';
+import { assetNameFor, resolveReleaseAssetUrl, shouldUseFallbackUrl } from './install-lib.js';
 
 const REPO = 'Dhruv2mars/mdv';
 
@@ -104,7 +104,7 @@ async function downloadWithFallback(primaryUrl, version, asset, outPath) {
       getRelease: getRelease
     });
 
-    if (!fallbackUrl || fallbackUrl === primaryUrl) {
+    if (!shouldUseFallbackUrl(primaryUrl, fallbackUrl)) {
       throw primaryErr;
     }
 
