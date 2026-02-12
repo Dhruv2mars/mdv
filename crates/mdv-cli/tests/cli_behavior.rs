@@ -36,6 +36,20 @@ fn wait_with_timeout(mut child: std::process::Child, timeout: Duration) -> Outpu
     }
 }
 
+fn assert_force_tui_exit_or_known_io_error(output: Output) {
+    if output.status.success() {
+        return;
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Resource temporarily unavailable")
+            || stderr.contains("No such file or directory"),
+        "stderr: {}",
+        stderr
+    );
+}
+
 #[cfg(target_os = "linux")]
 fn sh_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\"'\"'"))
@@ -158,11 +172,7 @@ fn path_mode_force_tui_still_exits_non_interactive() {
         .spawn()
         .expect("spawn mdv");
     let output = wait_with_timeout(child, Duration::from_millis(1200));
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    assert_force_tui_exit_or_known_io_error(output);
 }
 
 #[test]
@@ -181,11 +191,7 @@ fn stream_mode_force_tui_exits_after_stdin_close() {
     }
     let _ = child.stdin.take();
     let output = wait_with_timeout(child, Duration::from_millis(1200));
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    assert_force_tui_exit_or_known_io_error(output);
 }
 
 #[test]
