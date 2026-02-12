@@ -127,6 +127,30 @@ impl EditorBuffer {
         false
     }
 
+    pub fn find_prev(&mut self, needle: &str) -> bool {
+        if needle.is_empty() {
+            return false;
+        }
+
+        let start = if self.cursor == 0 {
+            self.text.len()
+        } else {
+            self.prev_char_boundary(self.cursor)
+        };
+
+        if let Some(offset) = self.text[..start].rfind(needle) {
+            self.cursor = offset;
+            return true;
+        }
+
+        if let Some(offset) = self.text[start..].rfind(needle) {
+            self.cursor = start + offset;
+            return true;
+        }
+
+        false
+    }
+
     pub fn move_left(&mut self) {
         if self.cursor == 0 {
             return;
@@ -206,6 +230,35 @@ impl EditorBuffer {
         );
         self.cursor = self.text.len();
         self.dirty = true;
+    }
+
+    pub fn apply_external_hunk(&mut self, hunk_index: usize) -> bool {
+        let Some(conflict) = self.conflict.clone() else {
+            return false;
+        };
+        let Some(hunk) = conflict.hunks.get(hunk_index).cloned() else {
+            return false;
+        };
+
+        let mut lines: Vec<String> = self.text.split('\n').map(ToString::to_string).collect();
+        let start = hunk.local_start.min(lines.len());
+        let end = start
+            .saturating_add(hunk.local_lines.len())
+            .min(lines.len());
+        lines.splice(start..end, hunk.external_lines);
+        self.text = lines.join("\n");
+        self.cursor = self.index_at_line_col(start, 0);
+        self.dirty = true;
+
+        let external = conflict.external;
+        let hunks = compute_conflict_hunks(&self.text, &external);
+        if hunks.is_empty() {
+            self.conflict = None;
+        } else {
+            self.conflict = Some(ConflictState { external, hunks });
+        }
+
+        true
     }
 
     pub fn save_to_path(&mut self, path: &Path) -> io::Result<()> {
@@ -529,6 +582,50 @@ mod tests {
 
         assert!(!buf.find_next("zzz"));
         assert!(!buf.find_next(""));
+    }
+
+    #[test]
+    fn find_prev_wraps_and_rewinds() {
+        let mut buf = EditorBuffer::new("alpha beta alpha".into());
+        buf.goto_line(1);
+        assert!(buf.find_prev("alpha"));
+        assert_eq!(buf.cursor(), 11);
+
+        assert!(buf.find_prev("alpha"));
+        assert_eq!(buf.cursor(), 0);
+
+        assert!(!buf.find_prev("zzz"));
+        assert!(!buf.find_prev(""));
+    }
+
+    #[test]
+    fn apply_external_hunk_updates_text_and_resolves_when_done() {
+        let mut buf = EditorBuffer::new("a\nb\nc".into());
+        buf.dirty = true;
+        buf.on_external_change("a\nB\nc\nd".into());
+        assert!(buf.is_conflicted());
+        assert_eq!(buf.conflict().expect("conflict").hunks.len(), 2);
+
+        assert!(buf.apply_external_hunk(1));
+        assert!(buf.text().contains("\nd"));
+        assert!(buf.is_conflicted());
+        assert_eq!(buf.conflict().expect("conflict").hunks.len(), 1);
+
+        assert!(buf.apply_external_hunk(0));
+        assert_eq!(buf.text(), "a\nB\nc\nd");
+        assert!(buf.dirty);
+        assert!(!buf.is_conflicted());
+    }
+
+    #[test]
+    fn apply_external_hunk_returns_false_for_invalid_index_or_no_conflict() {
+        let mut buf = EditorBuffer::new("x".into());
+        assert!(!buf.apply_external_hunk(0));
+
+        buf.insert_char('!');
+        buf.on_external_change("y".into());
+        assert!(buf.is_conflicted());
+        assert!(!buf.apply_external_hunk(99));
     }
 
     #[test]
