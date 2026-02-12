@@ -4,6 +4,8 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
 import {
   detectInstalledPackageManager,
@@ -60,4 +62,22 @@ test('detectInstalledPackageManager probes globally installed package', () => {
     return { status: 1, stdout: '' };
   }, null);
   assert.equal(manager, 'pnpm');
+});
+
+test('launcher install-miss path reports install missing without runtime crash', () => {
+  const root = mkdtempSync(join(tmpdir(), 'mdv-launcher-miss-'));
+  const launcher = fileURLToPath(new URL('../bin/mdv.js', import.meta.url));
+  const res = spawnSync(process.execPath, [launcher], {
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      MDV_INSTALL_ROOT: root,
+      MDV_SKIP_DOWNLOAD: '1'
+    }
+  });
+
+  const output = `${res.stdout || ''}\n${res.stderr || ''}`;
+  assert.notEqual(res.status, 0);
+  assert.match(output, /mdv: install missing/);
+  assert.doesNotMatch(output, /ReferenceError/i);
 });
