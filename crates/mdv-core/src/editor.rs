@@ -4,6 +4,8 @@ use std::path::Path;
 
 use crate::conflict_diff::{ConflictHunk, compute_conflict_hunks};
 
+const MAX_HISTORY_ENTRIES: usize = 128;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConflictState {
     pub external: String,
@@ -85,7 +87,8 @@ impl EditorBuffer {
         let Some(prev) = self.undo_stack.pop() else {
             return false;
         };
-        self.redo_stack.push(self.snapshot());
+        let snapshot = self.snapshot();
+        Self::push_history(&mut self.redo_stack, snapshot);
         self.restore(prev);
         true
     }
@@ -94,7 +97,8 @@ impl EditorBuffer {
         let Some(next) = self.redo_stack.pop() else {
             return false;
         };
-        self.undo_stack.push(self.snapshot());
+        let snapshot = self.snapshot();
+        Self::push_history(&mut self.undo_stack, snapshot);
         self.restore(next);
         true
     }
@@ -291,7 +295,16 @@ impl EditorBuffer {
     }
 
     fn push_undo_snapshot(&mut self) {
-        self.undo_stack.push(self.snapshot());
+        let snapshot = self.snapshot();
+        Self::push_history(&mut self.undo_stack, snapshot);
+    }
+
+    fn push_history(stack: &mut Vec<HistoryState>, state: HistoryState) {
+        stack.push(state);
+        if stack.len() > MAX_HISTORY_ENTRIES {
+            let overflow = stack.len() - MAX_HISTORY_ENTRIES;
+            stack.drain(0..overflow);
+        }
     }
 }
 
@@ -299,7 +312,7 @@ impl EditorBuffer {
 mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use super::EditorBuffer;
+    use super::{EditorBuffer, MAX_HISTORY_ENTRIES};
 
     fn temp_path(name: &str) -> std::path::PathBuf {
         let nanos = SystemTime::now()
@@ -530,5 +543,19 @@ mod tests {
         assert!(!buf.goto_line(0));
         assert!(!buf.goto_line(99));
         assert_eq!(buf.line_col_at_cursor(), (2, 0));
+    }
+
+    #[test]
+    fn undo_history_is_bounded() {
+        let mut buf = EditorBuffer::new(String::new());
+        for _ in 0..300 {
+            buf.insert_char('x');
+        }
+
+        let mut undo_count = 0usize;
+        while buf.undo() {
+            undo_count += 1;
+        }
+        assert_eq!(undo_count, MAX_HISTORY_ENTRIES);
     }
 }
