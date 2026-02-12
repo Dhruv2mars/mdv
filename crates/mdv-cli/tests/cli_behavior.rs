@@ -55,6 +55,18 @@ fn sh_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\"'\"'"))
 }
 
+#[cfg(target_os = "linux")]
+fn spawn_script(command: &str) -> std::process::Child {
+    let mut cmd = Command::new("script");
+    cmd.arg("-qfec").arg(command).arg("/dev/null");
+
+    cmd.stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn script")
+}
+
 #[test]
 fn path_mode_non_tty_renders_once_and_exits() {
     let path = temp_file("non-tty", "# Title\nbody\n");
@@ -217,24 +229,44 @@ fn stream_mode_force_tui_invalid_utf8_hits_stream_error_branch() {
 
 #[cfg(target_os = "linux")]
 #[test]
-fn linux_force_tui_interactive_exits_on_ctrl_q() {
+fn pty_force_tui_interactive_exits_on_ctrl_q() {
     let path = temp_file("linux-interactive", "# title\nx");
     let command = format!(
         "{} {}",
         sh_quote(mdv_bin()),
         sh_quote(&path.to_string_lossy())
     );
-    let mut child = Command::new("script")
-        .arg("-qfec")
-        .arg(command)
-        .arg("/dev/null")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn script");
+    let mut child = spawn_script(&command);
 
-    thread::sleep(Duration::from_millis(150));
+    thread::sleep(Duration::from_millis(300));
+    {
+        let stdin = child.stdin.as_mut().expect("stdin");
+        stdin.write_all(&[0x11]).expect("write ctrl+q");
+    }
+    let _ = child.stdin.take();
+
+    let output = wait_with_timeout(child, Duration::from_secs(3));
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn pty_force_tui_interactive_handles_external_file_update() {
+    let path = temp_file("linux-watch-update", "# title\nx");
+    let command = format!(
+        "{} {}",
+        sh_quote(mdv_bin()),
+        sh_quote(&path.to_string_lossy())
+    );
+    let mut child = spawn_script(&command);
+
+    thread::sleep(Duration::from_millis(250));
+    fs::write(&path, "# title\nupdated\n").expect("update watched file");
+    thread::sleep(Duration::from_millis(250));
     {
         let stdin = child.stdin.as_mut().expect("stdin");
         stdin.write_all(&[0x11]).expect("write ctrl+q");

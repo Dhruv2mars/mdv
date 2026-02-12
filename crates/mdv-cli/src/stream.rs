@@ -8,6 +8,7 @@ pub enum StreamMessage {
     Error(String),
 }
 
+#[cfg_attr(test, allow(dead_code))]
 pub fn start() -> Receiver<StreamMessage> {
     let (tx, rx) = mpsc::channel();
 
@@ -20,7 +21,7 @@ pub fn start() -> Receiver<StreamMessage> {
     rx
 }
 
-fn read_loop<R: BufRead>(reader: &mut R, tx: &Sender<StreamMessage>) {
+fn read_loop(reader: &mut dyn BufRead, tx: &Sender<StreamMessage>) {
     let mut acc = String::new();
 
     loop {
@@ -89,7 +90,19 @@ mod tests {
     }
 
     #[test]
-    fn start_returns_receiver() {
-        let _rx = super::start();
+    fn read_loop_ignores_send_error_for_update_and_end_messages() {
+        let data = Cursor::new("a\n");
+        let mut reader = BufReader::new(data);
+        let (tx, rx) = mpsc::channel::<StreamMessage>();
+        drop(rx);
+        read_loop(&mut reader, &tx);
+    }
+
+    #[test]
+    fn read_loop_ignores_send_error_for_error_message() {
+        let mut reader = BufReader::new(ErrorReader);
+        let (tx, rx) = mpsc::channel::<StreamMessage>();
+        drop(rx);
+        read_loop(&mut reader, &tx);
     }
 }

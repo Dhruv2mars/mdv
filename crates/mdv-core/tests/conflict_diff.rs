@@ -66,3 +66,15 @@ fn editor_save_to_path_success_and_error_paths() {
     assert!(!err.to_string().is_empty());
     let _ = std::fs::remove_dir(&err_path);
 }
+
+#[test]
+fn editor_move_down_clamps_to_end_when_target_col_is_past_line_len() {
+    let mut editor = EditorBuffer::new("abcd\ne".into());
+    editor.move_up();
+    editor.move_right();
+    editor.move_right();
+    editor.move_right();
+    assert_eq!(editor.line_col_at_cursor(), (0, 4));
+    editor.move_down();
+    assert_eq!(editor.line_col_at_cursor(), (1, 1));
+}
