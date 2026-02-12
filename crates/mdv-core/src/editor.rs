@@ -158,6 +158,18 @@ impl EditorBuffer {
         self.line_col_at(self.cursor)
     }
 
+    pub fn goto_line(&mut self, line_number: usize) -> bool {
+        if line_number == 0 {
+            return false;
+        }
+        let total_lines = self.text.split('\n').count().max(1);
+        if line_number > total_lines {
+            return false;
+        }
+        self.cursor = self.index_at_line_col(line_number - 1, 0);
+        true
+    }
+
     pub fn on_external_change(&mut self, external: String) {
         if self.dirty {
             self.conflict = Some(ConflictState {
@@ -504,5 +516,19 @@ mod tests {
 
         assert!(!buf.find_next("zzz"));
         assert!(!buf.find_next(""));
+    }
+
+    #[test]
+    fn goto_line_jumps_and_bounds() {
+        let mut buf = EditorBuffer::new("a\nb\nc".into());
+        assert!(buf.goto_line(2));
+        assert_eq!(buf.line_col_at_cursor(), (1, 0));
+
+        assert!(buf.goto_line(3));
+        assert_eq!(buf.line_col_at_cursor(), (2, 0));
+
+        assert!(!buf.goto_line(0));
+        assert!(!buf.goto_line(99));
+        assert_eq!(buf.line_col_at_cursor(), (2, 0));
     }
 }
