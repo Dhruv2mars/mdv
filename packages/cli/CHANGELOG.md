@@ -1,5 +1,11 @@
 # @dhruv2mars/mdv
 
+## 0.0.10
+
+### Patch Changes
+
+- Add repeat-search keys, conflict-hunk navigation/apply actions, and preview caching for faster redraws.
+
 ## 0.0.9
 
 ### Patch Changes
