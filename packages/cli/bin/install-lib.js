@@ -1,3 +1,5 @@
+import { join } from 'node:path';
+
 export function assetNameFor(platform = process.platform, arch = process.arch) {
   const ext = platform === 'win32' ? '.exe' : '';
   return `mdv-${platform}-${arch}${ext}`;
@@ -12,6 +14,49 @@ export function checksumsAssetNameFromBinaryAsset(asset) {
   const m = asset.match(/^mdv-([a-z0-9]+)-([a-z0-9_]+)(?:\.exe)?$/i);
   if (!m) return null;
   return checksumsAssetNameFor(m[1], m[2]);
+}
+
+function parseIntEnv(value, fallback, min, max) {
+  const parsed = Number.parseInt(String(value ?? ''), 10);
+  if (!Number.isFinite(parsed)) return fallback;
+  if (parsed < min) return min;
+  if (parsed > max) return max;
+  return parsed;
+}
+
+export function installTuningFromEnv(env = process.env) {
+  return {
+    retryAttempts: parseIntEnv(env.MDV_INSTALL_RETRY_ATTEMPTS, 3, 1, 10),
+    timeoutMs: parseIntEnv(env.MDV_INSTALL_TIMEOUT_MS, 15000, 1000, 120000),
+    backoffMs: parseIntEnv(env.MDV_INSTALL_BACKOFF_MS, 250, 50, 5000),
+    backoffJitterMs: parseIntEnv(env.MDV_INSTALL_BACKOFF_JITTER_MS, 100, 0, 2000)
+  };
+}
+
+export function computeBackoffDelay(attempt, backoffMs, backoffJitterMs, rand = Math.random) {
+  const scaled = Math.max(1, attempt) * Math.max(0, backoffMs);
+  if (backoffJitterMs <= 0) return scaled;
+  const jitter = Math.floor(Math.max(0, rand()) * (backoffJitterMs + 1));
+  return scaled + jitter;
+}
+
+export function cachePathsFor(installRoot, version, asset, checksumsAsset) {
+  const root = join(installRoot, 'cache', `v${version}`);
+  return {
+    cacheDir: root,
+    cacheBinary: join(root, asset),
+    cacheChecksums: join(root, checksumsAsset)
+  };
+}
+
+export function buildChecksumMismatchHelp({ asset, expected, actual, cachePath }) {
+  const shortExpected = String(expected || '').slice(0, 12);
+  const shortActual = String(actual || '').slice(0, 12);
+  return [
+    `checksum mismatch for ${asset}`,
+    `expected=${shortExpected}... actual=${shortActual}...`,
+    `clear cache and retry: rm -rf ${cachePath}`
+  ].join('; ');
 }
 
 export function findAssetUrl(release, asset) {

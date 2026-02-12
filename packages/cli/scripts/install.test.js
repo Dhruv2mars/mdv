@@ -7,9 +7,13 @@ import { fileURLToPath } from 'node:url';
 
 import {
   assetNameFor,
+  buildChecksumMismatchHelp,
+  cachePathsFor,
   checksumsAssetNameFor,
   checksumsAssetNameFromBinaryAsset,
+  computeBackoffDelay,
   findAssetUrl,
+  installTuningFromEnv,
   parseChecksumForAsset,
   resolveReleaseAssetBundle,
   resolveReleaseAssetUrl,
@@ -212,6 +216,45 @@ test('shouldUseFallbackUrl rejects empty/same and accepts different urls', () =>
   assert.equal(shouldUseFallbackUrl('https://a/b', null), false);
   assert.equal(shouldUseFallbackUrl('https://a/b', 'https://a/b'), false);
   assert.equal(shouldUseFallbackUrl('https://a/b', 'https://a/c'), true);
+});
+
+test('installTuningFromEnv clamps invalid and out-of-range values', () => {
+  const tuning = installTuningFromEnv({
+    MDV_INSTALL_RETRY_ATTEMPTS: '0',
+    MDV_INSTALL_TIMEOUT_MS: '999999',
+    MDV_INSTALL_BACKOFF_MS: 'bad',
+    MDV_INSTALL_BACKOFF_JITTER_MS: '-1'
+  });
+  assert.deepEqual(tuning, {
+    retryAttempts: 1,
+    timeoutMs: 120000,
+    backoffMs: 250,
+    backoffJitterMs: 0
+  });
+});
+
+test('computeBackoffDelay includes attempt scale + jitter', () => {
+  assert.equal(computeBackoffDelay(1, 200, 100, () => 0), 200);
+  assert.equal(computeBackoffDelay(3, 200, 100, () => 0.5), 650);
+});
+
+test('cachePathsFor builds versioned cache paths', () => {
+  const paths = cachePathsFor('/tmp/mdv-root', '0.1.2', 'mdv-linux-x64', 'checksums-linux-x64.txt');
+  assert.equal(paths.cacheDir, '/tmp/mdv-root/cache/v0.1.2');
+  assert.equal(paths.cacheBinary, '/tmp/mdv-root/cache/v0.1.2/mdv-linux-x64');
+  assert.equal(paths.cacheChecksums, '/tmp/mdv-root/cache/v0.1.2/checksums-linux-x64.txt');
+});
+
+test('buildChecksumMismatchHelp gives actionable recovery steps', () => {
+  const msg = buildChecksumMismatchHelp({
+    asset: 'mdv-linux-x64',
+    expected: 'a'.repeat(64),
+    actual: 'b'.repeat(64),
+    cachePath: '/tmp/mdv/cache/v0.1.0'
+  });
+
+  assert.match(msg, /checksum mismatch for mdv-linux-x64/);
+  assert.match(msg, /rm -rf \/tmp\/mdv\/cache\/v0.1.0/);
 });
 
 test('package has minimal user README', () => {

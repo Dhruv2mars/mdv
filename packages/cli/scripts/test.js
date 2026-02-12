@@ -10,6 +10,8 @@ const unit = spawnSync(
   [
     '--test',
     join(testsDir, 'install.test.js'),
+    join(testsDir, 'mdv.test.js'),
+    join(testsDir, 'platform-matrix.test.js'),
     join(testsDir, 'release-contract.test.js')
   ],
   {
