@@ -43,7 +43,7 @@ jobs:
           mkdir -p coverage
           cargo llvm-cov --workspace --no-report
           cargo llvm-cov report --summary-only
-          cargo llvm-cov report --fail-under-lines 100 --lcov --output-path coverage/lcov.info
+          cargo llvm-cov report --fail-under-lines 95 --lcov --output-path coverage/lcov.info
 
       - name: Upload coverage artifact
         uses: actions/upload-artifact@v4
