@@ -1,5 +1,11 @@
 # @dhruv2mars/mdv
 
+## 0.0.14
+
+### Patch Changes
+
+- Harden installer reliability (cache-first verified installs, tuned retries/timeouts, checksum recovery guidance, debug tracing) and add manual updater command `mdv update`.
+
 ## 0.0.13
 
 ### Patch Changes
