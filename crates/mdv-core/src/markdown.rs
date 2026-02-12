@@ -142,13 +142,15 @@ pub fn render_preview_lines(markdown: &str, width: u16) -> Vec<String> {
                         .list_stack
                         .last_mut()
                         .expect("pulldown-cmark item outside list");
-                    let prefix = if list.ordered {
+                    let bullet = if list.ordered {
                         let p = format!("{}. ", list.next_index);
                         list.next_index += 1;
                         p
                     } else {
                         "- ".to_string()
                     };
+                    let depth = renderer.list_stack.len().saturating_sub(1);
+                    let prefix = format!("{}{bullet}", "  ".repeat(depth));
                     renderer.pending_prefix = Some(prefix);
                 }
                 Tag::CodeBlock(kind) => {
@@ -355,6 +357,24 @@ mod tests {
         assert_eq!(lines[0], "> quoted");
         assert_eq!(lines[1], "1. first");
         assert_eq!(lines[2], "2. second");
+    }
+
+    #[test]
+    fn renders_nested_lists_with_indent() {
+        let src = "- parent\n  - child\n\n> - q1\n>   - q2";
+        let lines = render_preview_lines(src, 80);
+        assert_eq!(lines[0], "- parent");
+        assert_eq!(lines[1], "  - child");
+        assert_eq!(lines[2], "> - q1");
+        assert_eq!(lines[3], ">   - q2");
+    }
+
+    #[test]
+    fn preserves_ordered_list_start_index() {
+        let src = "3. three\n4. four";
+        let lines = render_preview_lines(src, 80);
+        assert_eq!(lines[0], "3. three");
+        assert_eq!(lines[1], "4. four");
     }
 
     #[test]
