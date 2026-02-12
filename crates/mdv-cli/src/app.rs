@@ -402,10 +402,7 @@ fn status_line(
 }
 
 fn to_lines(text: &str) -> Vec<String> {
-    if text.is_empty() {
-        return vec![String::new()];
-    }
-    text.lines().map(ToString::to_string).collect()
+    text.split('\n').map(ToString::to_string).collect()
 }
 
 fn clamp_scroll(scroll: usize, total: usize, height: usize) -> usize {
@@ -464,5 +461,10 @@ mod tests {
     #[test]
     fn to_lines_returns_single_empty_line_for_empty_text() {
         assert_eq!(to_lines(""), vec![String::new()]);
+    }
+
+    #[test]
+    fn to_lines_keeps_trailing_blank_line() {
+        assert_eq!(to_lines("a\n"), vec!["a".to_string(), String::new()]);
     }
 }
