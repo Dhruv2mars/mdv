@@ -1,5 +1,11 @@
 # @dhruv2mars/mdv
 
+## 0.0.13
+
+### Patch Changes
+
+- Improve runtime reliability and perf guardrails: stricter file-read/write error handling, bounded stream buffer, bounded undo history memory, and lower-copy preview cache path.
+
 ## 0.0.12
 
 ### Patch Changes
