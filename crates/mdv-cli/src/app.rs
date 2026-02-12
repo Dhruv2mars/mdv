@@ -4,8 +4,8 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
+use crossterm::ExecutableCommand;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
-use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
@@ -155,7 +155,7 @@ impl App {
 
     pub fn run(&mut self) -> Result<()> {
         let mut stdout = io::stdout();
-        execute!(stdout, EnterAlternateScreen)?;
+        stdout.execute(EnterAlternateScreen)?;
         let backend = CrosstermBackend::new(stdout);
         let mut terminal = Terminal::new(backend)?;
 
@@ -164,7 +164,7 @@ impl App {
         let loop_result = self.run_loop(&mut terminal);
 
         toggle_raw_mode(self.interactive_input, disable_raw_mode)?;
-        execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+        terminal.backend_mut().execute(LeaveAlternateScreen)?;
         terminal.show_cursor()?;
 
         loop_result
@@ -1037,6 +1037,18 @@ mod tests {
     }
 
     #[test]
+    fn handle_key_char_readonly_does_not_insert() {
+        let path = temp_path("readonly-char");
+        fs::write(&path, "x").expect("seed");
+        let mut app = App::new_file(path.clone(), true, false, false, "x".into()).expect("app");
+        let mut running = true;
+        app.handle_key(key(KeyCode::Char('z'), KeyModifiers::NONE), &mut running)
+            .expect("readonly char");
+        assert_eq!(app.editor.text(), "x");
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
     fn draw_sets_cursor_when_visible() {
         let path = temp_path("draw-cursor");
         fs::write(&path, "x").expect("seed");
@@ -1045,6 +1057,23 @@ mod tests {
         app.preview_scroll = 0;
 
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
+        terminal.draw(|frame| app.draw(frame)).expect("draw");
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn draw_skips_cursor_when_not_visible() {
+        let path = temp_path("draw-cursor-offscreen");
+        let text = (0..40)
+            .map(|i| i.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        fs::write(&path, &text).expect("seed");
+        let mut app = App::new_file(path.clone(), false, false, false, text).expect("app");
+        app.editor_scroll = 0;
+        app.preview_scroll = 0;
+
+        let mut terminal = Terminal::new(TestBackend::new(40, 8)).expect("terminal");
         terminal.draw(|frame| app.draw(frame)).expect("draw");
         let _ = fs::remove_file(&path);
     }
