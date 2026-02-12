@@ -24,6 +24,7 @@ import {
   checksumsAssetNameFor,
   computeBackoffDelay,
   installTuningFromEnv,
+  packageManagerHintFromEnv,
   parseChecksumForAsset,
   resolveReleaseAssetBundle,
   shouldUseFallbackUrl
@@ -33,6 +34,7 @@ const REPO = 'Dhruv2mars/mdv';
 
 const installRoot = process.env.MDV_INSTALL_ROOT || join(homedir(), '.mdv');
 const binDir = join(installRoot, 'bin');
+const metaPath = join(installRoot, 'install-meta.json');
 const binName = process.platform === 'win32' ? 'mdv.exe' : 'mdv';
 const dest = join(binDir, binName);
 const tuning = installTuningFromEnv(process.env);
@@ -83,6 +85,7 @@ try {
     persistCache(cachePaths, checksumsText, dest);
     trace('cache-store');
   }
+  persistInstallMeta();
   trace('success');
   process.exit(0);
 } catch (err) {
@@ -340,6 +343,21 @@ function persistCache(paths, checksumsText, sourceBinaryPath) {
     writeFileSync(paths.cacheChecksums, checksumsText, 'utf8');
   } catch {
     trace('cache-store-failed');
+  }
+}
+
+function persistInstallMeta() {
+  const packageManager = packageManagerHintFromEnv(process.env);
+  const meta = {
+    packageManager,
+    version,
+    savedAt: new Date().toISOString()
+  };
+  try {
+    writeFileSync(metaPath, JSON.stringify(meta, null, 2), 'utf8');
+    trace(`meta-store pm=${packageManager || 'unknown'}`);
+  } catch {
+    trace('meta-store-failed');
   }
 }
 

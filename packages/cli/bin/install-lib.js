@@ -16,6 +16,22 @@ export function checksumsAssetNameFromBinaryAsset(asset) {
   return checksumsAssetNameFor(m[1], m[2]);
 }
 
+export function packageManagerHintFromEnv(env = process.env) {
+  const execPath = String(env.npm_execpath || '').toLowerCase();
+  if (execPath.includes('bun')) return 'bun';
+  if (execPath.includes('pnpm')) return 'pnpm';
+  if (execPath.includes('yarn')) return 'yarn';
+  if (execPath.includes('npm')) return 'npm';
+
+  const ua = String(env.npm_config_user_agent || '').toLowerCase();
+  if (ua.startsWith('bun/')) return 'bun';
+  if (ua.startsWith('pnpm/')) return 'pnpm';
+  if (ua.startsWith('yarn/')) return 'yarn';
+  if (ua.startsWith('npm/')) return 'npm';
+
+  return null;
+}
+
 function parseIntEnv(value, fallback, min, max) {
   const parsed = Number.parseInt(String(value ?? ''), 10);
   if (!Number.isFinite(parsed)) return fallback;
