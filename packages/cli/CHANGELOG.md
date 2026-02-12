@@ -1,5 +1,11 @@
 # @dhruv2mars/mdv
 
+## 0.0.15
+
+### Patch Changes
+
+- Make `mdv update` package-manager aware: prefer original installer manager (bun/pnpm/yarn/npm), fallback by env hint, then npm.
+
 ## 0.0.14
 
 ### Patch Changes
