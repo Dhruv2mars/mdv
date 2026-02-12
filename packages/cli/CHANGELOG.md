@@ -1,5 +1,11 @@
 # @dhruv2mars/mdv
 
+## 0.0.6
+
+### Patch Changes
+
+- Fix trailing blank line handling in editor line splitting.
+
 ## 0.0.5
 
 ### Patch Changes
