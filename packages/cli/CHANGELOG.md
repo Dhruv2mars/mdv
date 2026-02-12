@@ -1,5 +1,11 @@
 # @dhruv2mars/mdv
 
+## 0.0.17
+
+### Patch Changes
+
+- Show help + exit 0 when `mdv` runs with no args (instead of hard error).
+
 ## 0.0.16
 
 ### Patch Changes
