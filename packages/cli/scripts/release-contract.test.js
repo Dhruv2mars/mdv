@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { assetNameFor } from '../bin/install-lib.js';
+import { assetNameFor, checksumsAssetNameFor } from '../bin/install-lib.js';
 
 const scriptsDir = fileURLToPath(new URL('.', import.meta.url));
 const packageRoot = join(scriptsDir, '..');
@@ -46,6 +46,18 @@ test('installer assetNameFor agrees with release matrix', () => {
 
   for (const asset of assets) {
     assert.equal(assetNameFor(asset.platform, asset.arch), asset.name);
+  }
+});
+
+test('installer checksumsAssetNameFor agrees with release matrix', () => {
+  const text = readFileSync(releaseWorkflow, 'utf8');
+  const assets = parseReleaseAssets(text);
+
+  for (const asset of assets) {
+    assert.equal(
+      checksumsAssetNameFor(asset.platform, asset.arch),
+      `checksums-${asset.platform}-${asset.arch}.txt`
+    );
   }
 });
 
