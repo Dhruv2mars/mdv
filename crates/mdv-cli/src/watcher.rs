@@ -11,12 +11,25 @@ pub enum WatchMessage {
 }
 
 pub fn start(path: &Path) -> notify::Result<(RecommendedWatcher, Receiver<WatchMessage>)> {
+    start_with_factory(path, |mut handler| {
+        recommended_watcher(move |result: notify::Result<Event>| handler.handle_event(result))
+    })
+}
+
+fn start_with_factory<F>(
+    path: &Path,
+    make_watcher: F,
+) -> notify::Result<(RecommendedWatcher, Receiver<WatchMessage>)>
+where
+    F: FnOnce(Box<dyn notify::EventHandler>) -> notify::Result<RecommendedWatcher>,
+{
     let watched_path = path.to_path_buf();
     let (tx, rx) = mpsc::channel();
-
-    let mut watcher = recommended_watcher(move |result: notify::Result<Event>| {
+    let handler: Box<dyn notify::EventHandler> = Box::new(move |result: notify::Result<Event>| {
         handle_notify_result(result, &watched_path, &tx)
-    })?;
+    });
+
+    let mut watcher = make_watcher(handler)?;
 
     watcher.watch(path, RecursiveMode::NonRecursive)?;
     Ok((watcher, rx))
@@ -205,6 +218,17 @@ mod tests {
         let path = std::env::temp_dir().join("mdv-watch-missing-start-test.md");
         let started = super::start(&path);
         assert!(started.is_err());
+    }
+
+    #[test]
+    fn start_propagates_watcher_constructor_error() {
+        let path = std::env::temp_dir().join("mdv-watch-factory-error-test.md");
+        std::fs::write(&path, "x").expect("seed");
+        let started = super::start_with_factory(&path, |_handler| {
+            Err::<notify::RecommendedWatcher, _>(notify::Error::generic("factory failed"))
+        });
+        assert!(matches!(started, Err(err) if err.to_string().contains("factory failed")));
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

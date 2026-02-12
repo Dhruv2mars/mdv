@@ -333,6 +333,18 @@ mod tests {
     }
 
     #[test]
+    fn move_down_to_shorter_last_line_clamps_to_end() {
+        let mut buf = EditorBuffer::new("abcd\ne".into());
+        buf.move_up();
+        buf.move_right();
+        buf.move_right();
+        buf.move_right();
+        assert_eq!(buf.line_col_at_cursor(), (0, 4));
+        buf.move_down();
+        assert_eq!(buf.line_col_at_cursor(), (1, 1));
+    }
+
+    #[test]
     fn merge_external_noop_when_not_conflicted() {
         let mut buf = EditorBuffer::new("x".into());
         buf.merge_external();

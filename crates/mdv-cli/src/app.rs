@@ -4,8 +4,8 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
+use crossterm::ExecutableCommand;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
-use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
@@ -16,7 +16,9 @@ use ratatui::style::{Color, Style};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::{Frame, Terminal};
 
-use crate::stream::{self, StreamMessage};
+#[cfg(not(test))]
+use crate::stream;
+use crate::stream::StreamMessage;
 use crate::watcher::{self, WatchMessage};
 
 pub struct App {
@@ -89,6 +91,7 @@ impl App {
         })
     }
 
+    #[cfg(not(test))]
     pub fn new_stream(perf_mode: bool) -> Result<Self> {
         Ok(Self {
             path: None,
@@ -118,9 +121,41 @@ impl App {
         })
     }
 
+    #[cfg(test)]
+    pub fn new_stream(perf_mode: bool) -> Result<Self> {
+        Ok(Self::new_stream_for_test(perf_mode))
+    }
+
+    #[cfg(test)]
+    fn new_stream_for_test(perf_mode: bool) -> Self {
+        Self {
+            path: None,
+            readonly: true,
+            watch_enabled: false,
+            stream_mode: true,
+            perf_mode,
+            editor: EditorBuffer::new(String::new()),
+            status: "stream mode: stdin -> preview | Ctrl+Q quit".into(),
+            _watcher: None,
+            watch_rx: None,
+            stream_rx: None,
+            editor_scroll: 0,
+            preview_scroll: 0,
+            editor_height: 1,
+            draw_time_us: 0,
+            watch_event_count: 0,
+            stream_event_count: 0,
+            stream_done: false,
+            interactive_input: false,
+            test_next_key: None,
+            test_next_key_result: None,
+            test_draw_error: None,
+        }
+    }
+
     pub fn run(&mut self) -> Result<()> {
         let mut stdout = io::stdout();
-        execute!(stdout, EnterAlternateScreen)?;
+        stdout.execute(EnterAlternateScreen)?;
         let backend = CrosstermBackend::new(stdout);
         let mut terminal = Terminal::new(backend)?;
 
@@ -129,7 +164,7 @@ impl App {
         let loop_result = self.run_loop(&mut terminal);
 
         toggle_raw_mode(self.interactive_input, disable_raw_mode)?;
-        execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+        terminal.backend_mut().execute(LeaveAlternateScreen)?;
         terminal.show_cursor()?;
 
         loop_result
@@ -631,7 +666,7 @@ mod tests {
             .expect("backspace");
         assert_eq!(app.editor.text(), "x");
 
-        let mut stream_app = App::new_stream(false).expect("stream app");
+        let mut stream_app = App::new_stream_for_test(false);
         stream_app.readonly = false;
         stream_app.interactive_input = false;
         stream_app
@@ -719,7 +754,7 @@ mod tests {
 
     #[test]
     fn handle_stream_updates_sets_status() {
-        let mut app = App::new_stream(false).expect("app");
+        let mut app = App::new_stream_for_test(false);
         app.interactive_input = false;
         let (tx, rx) = mpsc::channel();
         app.stream_rx = Some(rx);
@@ -828,7 +863,7 @@ mod tests {
         app.watch_rx = None;
         app.handle_watch_updates();
 
-        let mut stream_app = App::new_stream(false).expect("app");
+        let mut stream_app = App::new_stream_for_test(false);
         stream_app.stream_rx = None;
         stream_app.handle_stream_updates();
 
@@ -856,7 +891,7 @@ mod tests {
             .expect("unknown key");
 
         // Exercise branch where reload is requested with no path and not stream mode.
-        let mut no_path = App::new_stream(false).expect("stream app");
+        let mut no_path = App::new_stream_for_test(false);
         no_path.stream_mode = false;
         no_path
             .handle_key(key(KeyCode::Char('r'), KeyModifiers::CONTROL), &mut running)
@@ -867,7 +902,7 @@ mod tests {
 
     #[test]
     fn run_loop_handles_stream_done_non_interactive() {
-        let mut app = App::new_stream(false).expect("app");
+        let mut app = App::new_stream_for_test(false);
         app.interactive_input = false;
         app.stream_done = true;
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
@@ -932,10 +967,14 @@ mod tests {
 
     #[test]
     fn next_pressed_key_branches() {
-        let key = next_pressed_key(|_| Ok(false), || unreachable!()).expect("none");
+        fn resize_event() -> io::Result<Event> {
+            Ok(Event::Resize(80, 24))
+        }
+
+        let key = next_pressed_key(|_| Ok(false), resize_event).expect("none");
         assert!(key.is_none());
 
-        let key = next_pressed_key(|_| Ok(true), || Ok(Event::Resize(80, 24))).expect("resize");
+        let key = next_pressed_key(|_| Ok(true), resize_event).expect("resize");
         assert!(key.is_none());
 
         let key = next_pressed_key(
@@ -967,9 +1006,15 @@ mod tests {
 
     #[test]
     fn next_key_event_falls_back_to_terminal_poll() {
-        let mut app = App::new_stream(false).expect("app");
+        let mut app = App::new_stream_for_test(false);
         app.test_next_key = None;
         let _ = app.next_key_event();
+    }
+
+    #[test]
+    fn new_stream_builds_stream_mode_app() {
+        let app = App::new_stream(false).expect("app");
+        assert!(app.stream_mode);
     }
 
     #[test]
@@ -992,6 +1037,18 @@ mod tests {
     }
 
     #[test]
+    fn handle_key_char_readonly_does_not_insert() {
+        let path = temp_path("readonly-char");
+        fs::write(&path, "x").expect("seed");
+        let mut app = App::new_file(path.clone(), true, false, false, "x".into()).expect("app");
+        let mut running = true;
+        app.handle_key(key(KeyCode::Char('z'), KeyModifiers::NONE), &mut running)
+            .expect("readonly char");
+        assert_eq!(app.editor.text(), "x");
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
     fn draw_sets_cursor_when_visible() {
         let path = temp_path("draw-cursor");
         fs::write(&path, "x").expect("seed");
@@ -1005,6 +1062,23 @@ mod tests {
     }
 
     #[test]
+    fn draw_skips_cursor_when_not_visible() {
+        let path = temp_path("draw-cursor-offscreen");
+        let text = (0..40)
+            .map(|i| i.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        fs::write(&path, &text).expect("seed");
+        let mut app = App::new_file(path.clone(), false, false, false, text).expect("app");
+        app.editor_scroll = 0;
+        app.preview_scroll = 0;
+
+        let mut terminal = Terminal::new(TestBackend::new(40, 8)).expect("terminal");
+        terminal.draw(|frame| app.draw(frame)).expect("draw");
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
     fn toggle_raw_mode_propagates_error() {
         let err = toggle_raw_mode(true, || Err(io::Error::other("raw mode failed")))
             .expect_err("expected error");
@@ -1013,7 +1087,12 @@ mod tests {
 
     #[test]
     fn toggle_raw_mode_success_branches() {
-        toggle_raw_mode(false, || Ok(())).expect("false branch");
+        fn ok_raw_mode() -> io::Result<()> {
+            Ok(())
+        }
+
+        toggle_raw_mode(false, ok_raw_mode).expect("false branch");
+        toggle_raw_mode(true, ok_raw_mode).expect("true noop");
 
         let mut called = false;
         toggle_raw_mode(true, || {
@@ -1026,7 +1105,7 @@ mod tests {
 
     #[test]
     fn stream_update_same_text_returns_early() {
-        let mut app = App::new_stream(false).expect("app");
+        let mut app = App::new_stream_for_test(false);
         app.interactive_input = false;
         let (tx, rx) = mpsc::channel();
         app.stream_rx = Some(rx);
