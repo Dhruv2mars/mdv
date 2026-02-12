@@ -1,8 +1,14 @@
 #!/usr/bin/env node
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { existsSync, readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { assetNameFor, resolveReleaseAssetUrl } from '../bin/install-lib.js';
+
+const scriptDir = dirname(fileURLToPath(import.meta.url));
+const packageRoot = join(scriptDir, '..');
 
 test('assetNameFor maps platform+arch', () => {
   assert.equal(assetNameFor('linux', 'x64'), 'mdv-linux-x64');
@@ -62,4 +68,14 @@ test('resolveReleaseAssetUrl returns null when no asset found', async () => {
   });
 
   assert.equal(url, null);
+});
+
+test('package has minimal user README', () => {
+  const readmePath = join(packageRoot, 'README.md');
+  assert.equal(existsSync(readmePath), true);
+  const text = readFileSync(readmePath, 'utf8');
+  assert.match(text, /^# @dhruv2mars\/mdv/m);
+  assert.match(text, /^## Install/m);
+  assert.match(text, /^## Usage/m);
+  assert.match(text, /^## Keybinds/m);
 });
