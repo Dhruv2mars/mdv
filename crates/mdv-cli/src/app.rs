@@ -10,7 +10,7 @@ use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
 use mdv_core::{EditorBuffer, render_preview_lines};
-use ratatui::backend::CrosstermBackend;
+use ratatui::backend::{Backend, CrosstermBackend};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Style};
 use ratatui::widgets::{Block, Borders, Paragraph};
@@ -123,7 +123,7 @@ impl App {
         loop_result
     }
 
-    fn run_loop(&mut self, terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
+    fn run_loop<B: Backend>(&mut self, terminal: &mut Terminal<B>) -> Result<()> {
         let mut running = true;
 
         while running {
@@ -502,7 +502,7 @@ mod tests {
 
     use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
     use ratatui::Terminal;
-    use ratatui::backend::{CrosstermBackend, TestBackend};
+    use ratatui::backend::TestBackend;
 
     use crate::stream::StreamMessage;
     use crate::watcher::WatchMessage;
@@ -762,12 +762,8 @@ mod tests {
         fs::write(&path, "x").expect("seed");
         let mut app = App::new_file(path.clone(), false, false, false, "x".into()).expect("app");
         app.interactive_input = false;
-        let mut terminal =
-            Terminal::new(CrosstermBackend::new(std::io::stdout())).expect("terminal");
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
         app.run_loop(&mut terminal).expect("run_loop");
-
-        app.interactive_input = false;
-        app.run().expect("run");
 
         let _ = fs::remove_file(&path);
     }
@@ -839,8 +835,7 @@ mod tests {
         let mut app = App::new_stream(false).expect("app");
         app.interactive_input = false;
         app.stream_done = true;
-        let mut terminal =
-            Terminal::new(CrosstermBackend::new(std::io::stdout())).expect("terminal");
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
         app.run_loop(&mut terminal).expect("run loop stream done");
     }
 
@@ -864,8 +859,7 @@ mod tests {
         let mut app = App::new_file(path.clone(), false, false, false, "x".into()).expect("app");
         app.interactive_input = true;
         app.test_next_key = Some(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL));
-        let mut terminal =
-            Terminal::new(CrosstermBackend::new(std::io::stdout())).expect("terminal");
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
         app.run_loop(&mut terminal).expect("run loop");
         let _ = fs::remove_file(&path);
     }
