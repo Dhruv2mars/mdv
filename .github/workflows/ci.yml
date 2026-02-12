@@ -41,7 +41,7 @@ jobs:
       - name: Coverage
         run: |
           mkdir -p coverage
-          cargo llvm-cov --workspace --fail-under-lines 98 --lcov --output-path coverage/lcov.info
+          cargo llvm-cov --workspace --fail-under-lines 100 --lcov --output-path coverage/lcov.info
 
       - name: Upload coverage artifact
         uses: actions/upload-artifact@v4
