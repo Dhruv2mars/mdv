@@ -5,7 +5,12 @@ import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { assetNameFor, resolveReleaseAssetUrl } from '../bin/install-lib.js';
+import {
+  assetNameFor,
+  findAssetUrl,
+  resolveReleaseAssetUrl,
+  shouldUseFallbackUrl
+} from '../bin/install-lib.js';
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const packageRoot = join(scriptDir, '..');
@@ -68,6 +73,36 @@ test('resolveReleaseAssetUrl returns null when no asset found', async () => {
   });
 
   assert.equal(url, null);
+});
+
+test('findAssetUrl skips unusable matching assets', () => {
+  const release = {
+    assets: [
+      { name: 'mdv-linux-x64', browser_download_url: '' },
+      { name: 'mdv-linux-x64' },
+      { name: 'mdv-linux-x64', browser_download_url: 'https://example.com/good' }
+    ]
+  };
+  assert.equal(findAssetUrl(release, 'mdv-linux-x64'), 'https://example.com/good');
+});
+
+test('resolveReleaseAssetUrl returns null when both release lookups fail', async () => {
+  const url = await resolveReleaseAssetUrl({
+    version: '0.0.9',
+    asset: 'mdv-linux-x64',
+    getRelease: async () => {
+      throw new Error('network');
+    }
+  });
+
+  assert.equal(url, null);
+});
+
+test('shouldUseFallbackUrl rejects empty/same and accepts different urls', () => {
+  assert.equal(shouldUseFallbackUrl('https://a/b', ''), false);
+  assert.equal(shouldUseFallbackUrl('https://a/b', null), false);
+  assert.equal(shouldUseFallbackUrl('https://a/b', 'https://a/b'), false);
+  assert.equal(shouldUseFallbackUrl('https://a/b', 'https://a/c'), true);
 });
 
 test('package has minimal user README', () => {
