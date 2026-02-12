@@ -277,8 +277,18 @@ pub fn render_preview_lines(markdown: &str, width: u16) -> Vec<String> {
                 renderer.push_line(line);
             }
             Event::Html(html) | Event::InlineHtml(html) => renderer.append_text(&html),
-            Event::FootnoteReference(name) => renderer.append_text(&name),
-            Event::InlineMath(math) | Event::DisplayMath(math) => renderer.append_text(&math),
+            Event::FootnoteReference(name) => renderer.append_text(&format!("[^{name}]")),
+            Event::InlineMath(math) => renderer.append_text(&format!("${math}$")),
+            Event::DisplayMath(math) => {
+                renderer.flush_current();
+                let mut open = renderer.quote_prefix();
+                open.push_str("$$");
+                renderer.push_line(open);
+                renderer.push_code_text(math.trim_matches('\n'));
+                let mut close = renderer.quote_prefix();
+                close.push_str("$$");
+                renderer.push_line(close);
+            }
         }
     }
 
@@ -439,7 +449,17 @@ mod tests {
     fn renders_footnote_and_math_events() {
         let src = "x[^n]\n\n[^n]: note\n\n$y$";
         let lines = render_preview_lines(src, 80);
+        assert!(lines.join("\n").contains("x[^n]"));
         assert!(lines.join("\n").contains("note"));
-        assert!(lines.join("\n").contains("y"));
+        assert!(lines.join("\n").contains("$y$"));
+    }
+
+    #[test]
+    fn renders_display_math_block_with_fences() {
+        let src = "$$\na+b\n$$";
+        let lines = render_preview_lines(src, 80);
+        assert_eq!(lines[0], "$$");
+        assert_eq!(lines[1], "a+b");
+        assert_eq!(lines[2], "$$");
     }
 }
