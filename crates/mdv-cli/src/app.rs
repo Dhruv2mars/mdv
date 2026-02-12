@@ -1,4 +1,5 @@
 use std::fs;
+use std::hash::{Hash, Hasher};
 use std::io::{self, IsTerminal};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -42,14 +43,28 @@ pub struct App {
     interactive_input: bool,
     search_mode: bool,
     search_query: String,
+    last_search_query: String,
     goto_mode: bool,
     goto_query: String,
+    selected_conflict_hunk: usize,
+    preview_cache: Option<PreviewCache>,
     #[cfg(test)]
     test_next_key: Option<KeyEvent>,
     #[cfg(test)]
     test_next_key_result: Option<io::Result<Option<KeyEvent>>>,
     #[cfg(test)]
     test_draw_error: Option<io::Error>,
+    #[cfg(test)]
+    test_preview_cache_hits: u64,
+    #[cfg(test)]
+    test_preview_cache_misses: u64,
+}
+
+#[derive(Clone)]
+struct PreviewCache {
+    key: u64,
+    lines: Vec<String>,
+    selected_anchor: Option<usize>,
 }
 
 impl App {
@@ -74,7 +89,7 @@ impl App {
             stream_mode: false,
             perf_mode,
             editor: EditorBuffer::new(initial_text),
-            status: "Ctrl+Q quit | Ctrl+S save | Ctrl+R reload | Ctrl+F search | Ctrl+G goto | Ctrl+K keep | Ctrl+M merge".into(),
+            status: "Ctrl+Q quit | Ctrl+S save | Ctrl+R reload | Ctrl+F search | F3/F3+Shift next/prev | Ctrl+G goto | Ctrl+J/Ctrl+U hunk | Ctrl+E apply hunk | Ctrl+K keep | Ctrl+M merge".into(),
             _watcher: watcher,
             watch_rx,
             stream_rx: None,
@@ -88,14 +103,21 @@ impl App {
             interactive_input: io::stdin().is_terminal(),
             search_mode: false,
             search_query: String::new(),
+            last_search_query: String::new(),
             goto_mode: false,
             goto_query: String::new(),
+            selected_conflict_hunk: 0,
+            preview_cache: None,
             #[cfg(test)]
             test_next_key: None,
             #[cfg(test)]
             test_next_key_result: None,
             #[cfg(test)]
             test_draw_error: None,
+            #[cfg(test)]
+            test_preview_cache_hits: 0,
+            #[cfg(test)]
+            test_preview_cache_misses: 0,
         })
     }
 
@@ -122,14 +144,21 @@ impl App {
             interactive_input: io::stdin().is_terminal(),
             search_mode: false,
             search_query: String::new(),
+            last_search_query: String::new(),
             goto_mode: false,
             goto_query: String::new(),
+            selected_conflict_hunk: 0,
+            preview_cache: None,
             #[cfg(test)]
             test_next_key: None,
             #[cfg(test)]
             test_next_key_result: None,
             #[cfg(test)]
             test_draw_error: None,
+            #[cfg(test)]
+            test_preview_cache_hits: 0,
+            #[cfg(test)]
+            test_preview_cache_misses: 0,
         })
     }
 
@@ -161,11 +190,16 @@ impl App {
             interactive_input: false,
             search_mode: false,
             search_query: String::new(),
+            last_search_query: String::new(),
             goto_mode: false,
             goto_query: String::new(),
+            selected_conflict_hunk: 0,
+            preview_cache: None,
             test_next_key: None,
             test_next_key_result: None,
             test_draw_error: None,
+            test_preview_cache_hits: 0,
+            test_preview_cache_misses: 0,
         }
     }
 
@@ -247,10 +281,11 @@ impl App {
                 return;
             }
             self.editor.on_external_change(external);
+            self.sync_conflict_hunk_selection();
             self.ensure_cursor_visible();
             if self.editor.is_conflicted() {
                 self.status =
-                    "External update conflict: Ctrl+K keep | Ctrl+R reload | Ctrl+M merge".into();
+                    "External update conflict: Ctrl+J/Ctrl+U hunk | Ctrl+E apply | Ctrl+K keep | Ctrl+R reload | Ctrl+M merge".into();
             } else {
                 self.status = "File refreshed from disk".into();
             }
@@ -290,6 +325,7 @@ impl App {
             }
 
             self.editor.on_external_change(text);
+            self.sync_conflict_hunk_selection();
             self.ensure_cursor_visible();
 
             if !self.stream_done {
@@ -316,10 +352,13 @@ impl App {
                     let query = std::mem::take(&mut self.search_query);
                     if query.is_empty() {
                         self.status = "Search query empty".into();
-                    } else if self.editor.find_next(&query) {
-                        self.status = format!("Found: {query}");
                     } else {
-                        self.status = format!("Not found: {query}");
+                        self.last_search_query = query.clone();
+                        if self.editor.find_next(&query) {
+                            self.status = format!("Found: {query}");
+                        } else {
+                            self.status = format!("Not found: {query}");
+                        }
                     }
                 }
                 (KeyCode::Backspace, _) => {
@@ -398,16 +437,19 @@ impl App {
                     self.status = "Stream mode: reload disabled".into();
                 } else if self.editor.is_conflicted() {
                     self.editor.reload_external();
+                    self.sync_conflict_hunk_selection();
                     self.status = "Reloaded external".into();
                 } else if let Some(path) = &self.path {
                     let disk = fs::read_to_string(path).unwrap_or_default();
                     self.editor.on_external_change(disk);
+                    self.sync_conflict_hunk_selection();
                     self.status = "Reloaded from disk".into();
                 }
             }
             (KeyCode::Char('k'), KeyModifiers::CONTROL) => {
                 if self.editor.is_conflicted() {
                     self.editor.keep_local();
+                    self.sync_conflict_hunk_selection();
                     self.status = "Kept local".into();
                 } else {
                     self.status = "No conflict to keep".into();
@@ -416,6 +458,7 @@ impl App {
             (KeyCode::Char('m'), KeyModifiers::CONTROL) => {
                 if self.editor.is_conflicted() {
                     self.editor.merge_external();
+                    self.sync_conflict_hunk_selection();
                     self.status = "Merged with conflict markers".into();
                 } else {
                     self.status = "No conflict to merge".into();
@@ -435,6 +478,7 @@ impl App {
             }
             (KeyCode::Char('z'), KeyModifiers::CONTROL) => {
                 if self.editor.undo() {
+                    self.sync_conflict_hunk_selection();
                     self.status = "Undo".into();
                 } else {
                     self.status = "Nothing to undo".into();
@@ -442,10 +486,26 @@ impl App {
             }
             (KeyCode::Char('y'), KeyModifiers::CONTROL) => {
                 if self.editor.redo() {
+                    self.sync_conflict_hunk_selection();
                     self.status = "Redo".into();
                 } else {
                     self.status = "Nothing to redo".into();
                 }
+            }
+            (KeyCode::F(3), KeyModifiers::NONE) | (KeyCode::Char('n'), KeyModifiers::CONTROL) => {
+                self.repeat_search_next();
+            }
+            (KeyCode::F(3), KeyModifiers::SHIFT) | (KeyCode::Char('p'), KeyModifiers::CONTROL) => {
+                self.repeat_search_prev();
+            }
+            (KeyCode::Char('j'), KeyModifiers::CONTROL) => {
+                self.move_conflict_hunk(1);
+            }
+            (KeyCode::Char('u'), KeyModifiers::CONTROL) => {
+                self.move_conflict_hunk(-1);
+            }
+            (KeyCode::Char('e'), KeyModifiers::CONTROL) => {
+                self.apply_selected_conflict_hunk();
             }
             (KeyCode::Left, _) => self.editor.move_left(),
             (KeyCode::Right, _) => self.editor.move_right(),
@@ -460,16 +520,19 @@ impl App {
             (KeyCode::Enter, _) => {
                 if !self.readonly {
                     self.editor.insert_newline();
+                    self.sync_conflict_hunk_selection();
                 }
             }
             (KeyCode::Backspace, _) => {
                 if !self.readonly {
                     self.editor.backspace();
+                    self.sync_conflict_hunk_selection();
                 }
             }
             (KeyCode::Char(c), KeyModifiers::NONE | KeyModifiers::SHIFT) => {
                 if !self.readonly {
                     self.editor.insert_char(c);
+                    self.sync_conflict_hunk_selection();
                 }
             }
             _ => {}
@@ -503,6 +566,187 @@ impl App {
         self.preview_scroll = self.editor_scroll;
     }
 
+    fn repeat_search_next(&mut self) {
+        if self.last_search_query.is_empty() {
+            self.status = "No prior search".into();
+            return;
+        }
+
+        if self.editor.find_next(&self.last_search_query) {
+            self.status = format!("Found next: {}", self.last_search_query);
+            self.ensure_cursor_visible();
+        } else {
+            self.status = format!("Not found: {}", self.last_search_query);
+        }
+    }
+
+    fn repeat_search_prev(&mut self) {
+        if self.last_search_query.is_empty() {
+            self.status = "No prior search".into();
+            return;
+        }
+
+        if self.editor.find_prev(&self.last_search_query) {
+            self.status = format!("Found previous: {}", self.last_search_query);
+            self.ensure_cursor_visible();
+        } else {
+            self.status = format!("Not found: {}", self.last_search_query);
+        }
+    }
+
+    fn move_conflict_hunk(&mut self, direction: i32) {
+        let Some(conflict) = self.editor.conflict() else {
+            self.status = "No conflict hunks".into();
+            return;
+        };
+        if conflict.hunks.is_empty() {
+            self.status = "No conflict hunks".into();
+            return;
+        }
+
+        let len = conflict.hunks.len();
+        if direction < 0 {
+            if self.selected_conflict_hunk == 0 {
+                self.selected_conflict_hunk = len - 1;
+            } else {
+                self.selected_conflict_hunk -= 1;
+            }
+        } else {
+            self.selected_conflict_hunk = (self.selected_conflict_hunk + 1) % len;
+        }
+        self.status = format!("Conflict hunk {}/{}", self.selected_conflict_hunk + 1, len);
+    }
+
+    fn apply_selected_conflict_hunk(&mut self) {
+        if !self.editor.is_conflicted() {
+            self.status = "No conflict hunks".into();
+            return;
+        }
+
+        if self.editor.apply_external_hunk(self.selected_conflict_hunk) {
+            self.sync_conflict_hunk_selection();
+            self.ensure_cursor_visible();
+            if self.editor.is_conflicted() {
+                self.status = "Applied external hunk".into();
+            } else {
+                self.status = "Resolved conflict from hunks".into();
+            }
+        } else {
+            self.status = "No conflict hunks".into();
+        }
+    }
+
+    fn sync_conflict_hunk_selection(&mut self) {
+        let Some(conflict) = self.editor.conflict() else {
+            self.selected_conflict_hunk = 0;
+            return;
+        };
+        if conflict.hunks.is_empty() {
+            self.selected_conflict_hunk = 0;
+        } else {
+            self.selected_conflict_hunk = self
+                .selected_conflict_hunk
+                .min(conflict.hunks.len().saturating_sub(1));
+        }
+    }
+
+    fn build_preview_lines(&self, preview_width: u16) -> (Vec<String>, Option<usize>) {
+        let mut preview_lines = render_preview_lines(self.editor.text(), preview_width);
+        let mut selected_anchor = None;
+
+        if let Some(conflict) = self.editor.conflict() {
+            preview_lines.push(String::new());
+            if conflict.hunks.is_empty() {
+                preview_lines.push("--- Local block ---".into());
+                preview_lines.extend(self.editor.text().lines().map(ToString::to_string));
+                preview_lines.push("--- External block ---".into());
+                preview_lines.extend(conflict.external.lines().map(ToString::to_string));
+            } else {
+                for (idx, hunk) in conflict.hunks.iter().enumerate() {
+                    let selected = idx == self.selected_conflict_hunk;
+                    if selected {
+                        selected_anchor = Some(preview_lines.len());
+                        preview_lines
+                            .push(format!(">>> Local block @L{} <<<", hunk.local_start + 1));
+                    } else {
+                        preview_lines
+                            .push(format!("--- Local block @L{} ---", hunk.local_start + 1));
+                    }
+                    if hunk.local_lines.is_empty() {
+                        preview_lines.push("(no local lines)".into());
+                    } else {
+                        preview_lines.extend(hunk.local_lines.iter().cloned());
+                    }
+                    if selected {
+                        preview_lines.push(format!(
+                            ">>> External block @L{} <<<",
+                            hunk.external_start + 1
+                        ));
+                    } else {
+                        preview_lines.push(format!(
+                            "--- External block @L{} ---",
+                            hunk.external_start + 1
+                        ));
+                    }
+                    if hunk.external_lines.is_empty() {
+                        preview_lines.push("(no external lines)".into());
+                    } else {
+                        preview_lines.extend(hunk.external_lines.iter().cloned());
+                    }
+                    preview_lines.push(String::new());
+                }
+            }
+        }
+
+        (preview_lines, selected_anchor)
+    }
+
+    fn preview_cache_key(&self, preview_width: u16) -> u64 {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        preview_width.hash(&mut hasher);
+        self.selected_conflict_hunk.hash(&mut hasher);
+        self.editor.text().hash(&mut hasher);
+        if let Some(conflict) = self.editor.conflict() {
+            conflict.external.hash(&mut hasher);
+            for hunk in &conflict.hunks {
+                hunk.local_start.hash(&mut hasher);
+                hunk.external_start.hash(&mut hasher);
+                for line in &hunk.local_lines {
+                    line.hash(&mut hasher);
+                }
+                for line in &hunk.external_lines {
+                    line.hash(&mut hasher);
+                }
+            }
+        }
+        hasher.finish()
+    }
+
+    fn preview_lines_cached(&mut self, preview_width: u16) -> (Vec<String>, Option<usize>) {
+        let key = self.preview_cache_key(preview_width);
+        if let Some(cache) = &self.preview_cache
+            && cache.key == key
+        {
+            #[cfg(test)]
+            {
+                self.test_preview_cache_hits += 1;
+            }
+            return (cache.lines.clone(), cache.selected_anchor);
+        }
+
+        let (lines, selected_anchor) = self.build_preview_lines(preview_width);
+        self.preview_cache = Some(PreviewCache {
+            key,
+            lines: lines.clone(),
+            selected_anchor,
+        });
+        #[cfg(test)]
+        {
+            self.test_preview_cache_misses += 1;
+        }
+        (lines, selected_anchor)
+    }
+
     fn draw(&mut self, frame: &mut Frame<'_>) {
         let area = frame.area();
 
@@ -530,34 +774,13 @@ impl App {
 
         let preview_height = panes[1].height.saturating_sub(2) as usize;
         let preview_width = panes[1].width.saturating_sub(2);
-        let mut preview_lines = render_preview_lines(self.editor.text(), preview_width);
+        let (preview_lines, selected_anchor) = self.preview_lines_cached(preview_width);
 
-        if let Some(conflict) = self.editor.conflict() {
-            preview_lines.push(String::new());
-            if conflict.hunks.is_empty() {
-                preview_lines.push("--- Local block ---".into());
-                preview_lines.extend(self.editor.text().lines().map(ToString::to_string));
-                preview_lines.push("--- External block ---".into());
-                preview_lines.extend(conflict.external.lines().map(ToString::to_string));
-            } else {
-                for hunk in &conflict.hunks {
-                    preview_lines.push(format!("--- Local block @L{} ---", hunk.local_start + 1));
-                    if hunk.local_lines.is_empty() {
-                        preview_lines.push("(no local lines)".into());
-                    } else {
-                        preview_lines.extend(hunk.local_lines.iter().cloned());
-                    }
-                    preview_lines.push(format!(
-                        "--- External block @L{} ---",
-                        hunk.external_start + 1
-                    ));
-                    if hunk.external_lines.is_empty() {
-                        preview_lines.push("(no external lines)".into());
-                    } else {
-                        preview_lines.extend(hunk.external_lines.iter().cloned());
-                    }
-                    preview_lines.push(String::new());
-                }
+        if let Some(anchor) = selected_anchor {
+            if anchor < self.preview_scroll {
+                self.preview_scroll = anchor;
+            } else if anchor >= self.preview_scroll + preview_height.max(1) {
+                self.preview_scroll = anchor.saturating_sub(preview_height / 2);
             }
         }
 
@@ -844,6 +1067,43 @@ mod tests {
     }
 
     #[test]
+    fn handle_key_repeat_search_next_prev() {
+        let path = temp_path("search-repeat");
+        fs::write(&path, "one two one").expect("seed");
+        let mut app =
+            App::new_file(path.clone(), false, false, false, "one two one".into()).expect("app");
+        app.interactive_input = false;
+        let mut running = true;
+
+        app.handle_key(key(KeyCode::F(3), KeyModifiers::NONE), &mut running)
+            .expect("repeat empty");
+        assert_eq!(app.status, "No prior search");
+
+        app.handle_key(key(KeyCode::Char('f'), KeyModifiers::CONTROL), &mut running)
+            .expect("start search");
+        app.handle_key(key(KeyCode::Char('o'), KeyModifiers::NONE), &mut running)
+            .expect("q1");
+        app.handle_key(key(KeyCode::Char('n'), KeyModifiers::NONE), &mut running)
+            .expect("q2");
+        app.handle_key(key(KeyCode::Char('e'), KeyModifiers::NONE), &mut running)
+            .expect("q3");
+        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE), &mut running)
+            .expect("exec search");
+
+        app.handle_key(key(KeyCode::F(3), KeyModifiers::NONE), &mut running)
+            .expect("repeat next");
+        assert_eq!(app.editor.cursor(), 8);
+        assert_eq!(app.status, "Found next: one");
+
+        app.handle_key(key(KeyCode::F(3), KeyModifiers::SHIFT), &mut running)
+            .expect("repeat prev");
+        assert_eq!(app.editor.cursor(), 0);
+        assert_eq!(app.status, "Found previous: one");
+
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
     fn handle_key_goto_mode() {
         let path = temp_path("goto");
         fs::write(&path, "a\nb\nc").expect("seed");
@@ -966,6 +1226,40 @@ mod tests {
     }
 
     #[test]
+    fn handle_key_conflict_hunk_nav_and_apply() {
+        let path = temp_path("conflict-hunk-nav");
+        fs::write(&path, "a\nb\nc").expect("seed");
+        let mut app =
+            App::new_file(path.clone(), false, false, false, "a\nb\nc".into()).expect("app");
+        app.editor.dirty = true;
+        app.editor.on_external_change("a\nB\nc\nd".into());
+        assert!(app.editor.is_conflicted());
+        assert_eq!(app.editor.conflict().expect("conflict").hunks.len(), 2);
+
+        let mut running = true;
+        app.handle_key(key(KeyCode::Char('j'), KeyModifiers::CONTROL), &mut running)
+            .expect("next hunk");
+        assert_eq!(app.status, "Conflict hunk 2/2");
+
+        app.handle_key(key(KeyCode::Char('e'), KeyModifiers::CONTROL), &mut running)
+            .expect("apply hunk");
+        assert_eq!(app.status, "Applied external hunk");
+        assert!(app.editor.text().contains("\nd"));
+        assert_eq!(app.editor.conflict().expect("conflict").hunks.len(), 1);
+
+        app.handle_key(key(KeyCode::Char('u'), KeyModifiers::CONTROL), &mut running)
+            .expect("prev hunk");
+        assert_eq!(app.status, "Conflict hunk 1/1");
+
+        app.handle_key(key(KeyCode::Char('e'), KeyModifiers::CONTROL), &mut running)
+            .expect("apply final hunk");
+        assert_eq!(app.status, "Resolved conflict from hunks");
+        assert!(!app.editor.is_conflicted());
+
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
     fn handle_key_navigation_and_quit() {
         let path = temp_path("nav");
         fs::write(&path, "ab\ncd").expect("seed");
@@ -1008,7 +1302,7 @@ mod tests {
         app.handle_watch_updates();
         assert_eq!(
             app.status,
-            "Ctrl+Q quit | Ctrl+S save | Ctrl+R reload | Ctrl+F search | Ctrl+G goto | Ctrl+K keep | Ctrl+M merge"
+            "Ctrl+Q quit | Ctrl+S save | Ctrl+R reload | Ctrl+F search | F3/F3+Shift next/prev | Ctrl+G goto | Ctrl+J/Ctrl+U hunk | Ctrl+E apply hunk | Ctrl+K keep | Ctrl+M merge"
         );
 
         tx.send(WatchMessage::ExternalUpdate("disk".into()))
@@ -1024,7 +1318,7 @@ mod tests {
         assert!(app.editor.is_conflicted());
         assert_eq!(
             app.status,
-            "External update conflict: Ctrl+K keep | Ctrl+R reload | Ctrl+M merge"
+            "External update conflict: Ctrl+J/Ctrl+U hunk | Ctrl+E apply | Ctrl+K keep | Ctrl+R reload | Ctrl+M merge"
         );
 
         tx.send(WatchMessage::Error("bad".into()))
@@ -1420,6 +1714,30 @@ mod tests {
         terminal
             .draw(|frame| delete_only.draw(frame))
             .expect("draw delete");
+
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn draw_preview_cache_hits_and_invalidates() {
+        let path = temp_path("preview-cache");
+        fs::write(&path, "one").expect("seed");
+        let mut app = App::new_file(path.clone(), false, false, false, "one".into()).expect("app");
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
+
+        terminal.draw(|frame| app.draw(frame)).expect("first draw");
+        assert_eq!(app.test_preview_cache_misses, 1);
+        assert_eq!(app.test_preview_cache_hits, 0);
+
+        terminal.draw(|frame| app.draw(frame)).expect("second draw");
+        assert_eq!(app.test_preview_cache_misses, 1);
+        assert_eq!(app.test_preview_cache_hits, 1);
+
+        let mut running = true;
+        app.handle_key(key(KeyCode::Char('x'), KeyModifiers::NONE), &mut running)
+            .expect("edit");
+        terminal.draw(|frame| app.draw(frame)).expect("third draw");
+        assert_eq!(app.test_preview_cache_misses, 2);
 
         let _ = fs::remove_file(&path);
     }
