@@ -41,7 +41,7 @@ jobs:
       - name: Coverage
         run: |
           mkdir -p coverage
-          cargo llvm-cov --workspace --lcov --output-path coverage/lcov.info
+          cargo llvm-cov --workspace --fail-under-lines 98 --lcov --output-path coverage/lcov.info
 
       - name: Upload coverage artifact
         uses: actions/upload-artifact@v4
@@ -65,8 +65,54 @@ jobs:
       - name: Build cli binary
         run: cargo build -p mdv-cli
 
+      - name: CLI js tests
+        run: bun run --cwd packages/cli test
+
       - name: Pack npm package
         run: npm pack ./packages/cli
 
       - name: Launcher smoke
         run: MDV_BIN=target/debug/mdv-cli node packages/cli/bin/mdv.js --help
+
+  js-coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install deps
+        run: MDV_SKIP_DOWNLOAD=1 bun install --frozen-lockfile
+
+      - name: Build cli binary
+        run: cargo build -p mdv-cli
+
+      - name: JS coverage
+        run: bun run --cwd packages/cli coverage
+
+  perf-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Build release binary
+        run: cargo build -p mdv-cli --release
+
+      - name: CLI p95 perf gate
+        run: node scripts/perf-smoke.mjs
+
+      - name: Core render p95 perf gate
+        run: cargo test -p mdv-core --release --test perf -- --ignored
+
+      - name: Upload perf summary
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-smoke-summary
+          path: /tmp/mdv-perf-summary.txt
