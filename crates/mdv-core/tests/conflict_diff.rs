@@ -28,9 +28,15 @@ fn editor_conflict_state_contains_block_hunks() {
     editor.on_external_change("one\nTWO\nthree\nfour".into());
 
     let conflict = editor.conflict().expect("conflict");
-    assert_eq!(conflict.hunks.len(), 2);
+    assert_eq!(conflict.hunks.len(), 1);
     assert_eq!(conflict.hunks[0].local_start, 1);
     assert_eq!(conflict.hunks[0].external_start, 1);
-    assert_eq!(conflict.hunks[0].local_lines, vec!["two".to_string()]);
-    assert_eq!(conflict.hunks[0].external_lines, vec!["TWO".to_string()]);
+    assert_eq!(
+        conflict.hunks[0].local_lines,
+        vec!["two".to_string(), "three!".to_string()]
+    );
+    assert_eq!(
+        conflict.hunks[0].external_lines,
+        vec!["TWO".to_string(), "three".to_string(), "four".to_string()]
+    );
 }

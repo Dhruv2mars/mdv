@@ -340,11 +340,31 @@ impl App {
 
         if let Some(conflict) = self.editor.conflict() {
             preview_lines.push(String::new());
-            preview_lines.push("--- Local (unsaved) ---".into());
-            preview_lines.extend(self.editor.text().lines().map(ToString::to_string));
-            preview_lines.push(String::new());
-            preview_lines.push("--- External (updated below) ---".into());
-            preview_lines.extend(conflict.external.lines().map(ToString::to_string));
+            if conflict.hunks.is_empty() {
+                preview_lines.push("--- Local block ---".into());
+                preview_lines.extend(self.editor.text().lines().map(ToString::to_string));
+                preview_lines.push("--- External block ---".into());
+                preview_lines.extend(conflict.external.lines().map(ToString::to_string));
+            } else {
+                for hunk in &conflict.hunks {
+                    preview_lines.push(format!("--- Local block @L{} ---", hunk.local_start + 1));
+                    if hunk.local_lines.is_empty() {
+                        preview_lines.push("(no local lines)".into());
+                    } else {
+                        preview_lines.extend(hunk.local_lines.iter().cloned());
+                    }
+                    preview_lines.push(format!(
+                        "--- External block @L{} ---",
+                        hunk.external_start + 1
+                    ));
+                    if hunk.external_lines.is_empty() {
+                        preview_lines.push("(no external lines)".into());
+                    } else {
+                        preview_lines.extend(hunk.external_lines.iter().cloned());
+                    }
+                    preview_lines.push(String::new());
+                }
+            }
         }
 
         self.preview_scroll = clamp_scroll(

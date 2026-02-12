@@ -2,9 +2,12 @@ use std::fs;
 use std::io;
 use std::path::Path;
 
+use crate::conflict_diff::{ConflictHunk, compute_conflict_hunks};
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConflictState {
     pub external: String,
+    pub hunks: Vec<ConflictHunk>,
 }
 
 #[derive(Debug, Clone)]
@@ -99,7 +102,10 @@ impl EditorBuffer {
 
     pub fn on_external_change(&mut self, external: String) {
         if self.dirty {
-            self.conflict = Some(ConflictState { external });
+            self.conflict = Some(ConflictState {
+                hunks: compute_conflict_hunks(&self.text, &external),
+                external,
+            });
             return;
         }
         self.set_from_disk(external);
