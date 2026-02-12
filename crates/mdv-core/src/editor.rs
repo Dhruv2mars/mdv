@@ -16,6 +16,16 @@ pub struct EditorBuffer {
     cursor: usize,
     pub dirty: bool,
     conflict: Option<ConflictState>,
+    undo_stack: Vec<HistoryState>,
+    redo_stack: Vec<HistoryState>,
+}
+
+#[derive(Debug, Clone)]
+struct HistoryState {
+    text: String,
+    cursor: usize,
+    dirty: bool,
+    conflict: Option<ConflictState>,
 }
 
 impl EditorBuffer {
@@ -26,6 +36,8 @@ impl EditorBuffer {
             cursor,
             dirty: false,
             conflict: None,
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
         }
     }
 
@@ -46,6 +58,8 @@ impl EditorBuffer {
     }
 
     pub fn insert_char(&mut self, c: char) {
+        self.push_undo_snapshot();
+        self.redo_stack.clear();
         self.text.insert(self.cursor, c);
         self.cursor += c.len_utf8();
         self.dirty = true;
@@ -59,10 +73,30 @@ impl EditorBuffer {
         if self.cursor == 0 {
             return;
         }
+        self.push_undo_snapshot();
+        self.redo_stack.clear();
         let prev = self.prev_char_boundary(self.cursor);
         self.text.replace_range(prev..self.cursor, "");
         self.cursor = prev;
         self.dirty = true;
+    }
+
+    pub fn undo(&mut self) -> bool {
+        let Some(prev) = self.undo_stack.pop() else {
+            return false;
+        };
+        self.redo_stack.push(self.snapshot());
+        self.restore(prev);
+        true
+    }
+
+    pub fn redo(&mut self) -> bool {
+        let Some(next) = self.redo_stack.pop() else {
+            return false;
+        };
+        self.undo_stack.push(self.snapshot());
+        self.restore(next);
+        true
     }
 
     pub fn move_left(&mut self) {
@@ -202,6 +236,26 @@ impl EditorBuffer {
             idx += 1;
         }
         idx
+    }
+
+    fn snapshot(&self) -> HistoryState {
+        HistoryState {
+            text: self.text.clone(),
+            cursor: self.cursor,
+            dirty: self.dirty,
+            conflict: self.conflict.clone(),
+        }
+    }
+
+    fn restore(&mut self, state: HistoryState) {
+        self.text = state.text;
+        self.cursor = state.cursor;
+        self.dirty = state.dirty;
+        self.conflict = state.conflict;
+    }
+
+    fn push_undo_snapshot(&mut self) {
+        self.undo_stack.push(self.snapshot());
     }
 }
 
@@ -382,5 +436,36 @@ mod tests {
         let err = buf.save_to_path(&path).expect_err("save error");
         assert!(!err.to_string().is_empty());
         let _ = std::fs::remove_dir(&path);
+    }
+
+    #[test]
+    fn undo_redo_restores_text_and_cursor() {
+        let mut buf = EditorBuffer::new("ab".into());
+        assert_eq!(buf.cursor(), 2);
+
+        buf.insert_char('c');
+        assert_eq!(buf.text(), "abc");
+        assert_eq!(buf.cursor(), 3);
+
+        assert!(buf.undo());
+        assert_eq!(buf.text(), "ab");
+        assert_eq!(buf.cursor(), 2);
+
+        assert!(buf.redo());
+        assert_eq!(buf.text(), "abc");
+        assert_eq!(buf.cursor(), 3);
+    }
+
+    #[test]
+    fn redo_cleared_after_new_edit() {
+        let mut buf = EditorBuffer::new("ab".into());
+        buf.insert_char('c');
+        assert!(buf.undo());
+        assert_eq!(buf.text(), "ab");
+
+        buf.insert_char('x');
+        assert_eq!(buf.text(), "abx");
+        assert!(!buf.redo());
+        assert_eq!(buf.text(), "abx");
     }
 }

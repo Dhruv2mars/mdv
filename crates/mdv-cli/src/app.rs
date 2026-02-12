@@ -317,6 +317,20 @@ impl App {
                 self.editor.merge_external();
                 self.status = "Merged with conflict markers".into();
             }
+            (KeyCode::Char('z'), KeyModifiers::CONTROL) => {
+                if self.editor.undo() {
+                    self.status = "Undo".into();
+                } else {
+                    self.status = "Nothing to undo".into();
+                }
+            }
+            (KeyCode::Char('y'), KeyModifiers::CONTROL) => {
+                if self.editor.redo() {
+                    self.status = "Redo".into();
+                } else {
+                    self.status = "Nothing to redo".into();
+                }
+            }
             (KeyCode::Left, _) => self.editor.move_left(),
             (KeyCode::Right, _) => self.editor.move_right(),
             (KeyCode::Up, _) => self.editor.move_up(),
@@ -642,6 +656,40 @@ mod tests {
         app.handle_key(key(KeyCode::Char('r'), KeyModifiers::CONTROL), &mut running)
             .expect("reload");
         assert_eq!(app.status, "Reloaded from disk");
+
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn handle_key_undo_redo() {
+        let path = temp_path("undo-redo");
+        fs::write(&path, "x").expect("seed");
+        let mut app = App::new_file(path.clone(), false, false, false, "x".into()).expect("app");
+        app.interactive_input = false;
+        let mut running = true;
+
+        app.handle_key(key(KeyCode::Char('a'), KeyModifiers::NONE), &mut running)
+            .expect("insert");
+        assert_eq!(app.editor.text(), "xa");
+
+        app.handle_key(key(KeyCode::Char('z'), KeyModifiers::CONTROL), &mut running)
+            .expect("undo");
+        assert_eq!(app.editor.text(), "x");
+        assert_eq!(app.status, "Undo");
+
+        app.handle_key(key(KeyCode::Char('y'), KeyModifiers::CONTROL), &mut running)
+            .expect("redo");
+        assert_eq!(app.editor.text(), "xa");
+        assert_eq!(app.status, "Redo");
+
+        app.handle_key(key(KeyCode::Char('z'), KeyModifiers::CONTROL), &mut running)
+            .expect("undo 2");
+        app.handle_key(key(KeyCode::Char('b'), KeyModifiers::NONE), &mut running)
+            .expect("insert 2");
+        app.handle_key(key(KeyCode::Char('y'), KeyModifiers::CONTROL), &mut running)
+            .expect("redo empty");
+        assert_eq!(app.status, "Nothing to redo");
+        assert_eq!(app.editor.text(), "xb");
 
         let _ = fs::remove_file(&path);
     }
