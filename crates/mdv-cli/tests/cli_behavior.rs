@@ -9,6 +9,18 @@ fn mdv_bin() -> &'static str {
     env!("CARGO_BIN_EXE_mdv-cli")
 }
 
+fn with_coverage_env(cmd: &mut Command) {
+    if let Ok(profile) = std::env::var("LLVM_PROFILE_FILE") {
+        cmd.env("LLVM_PROFILE_FILE", profile);
+    }
+}
+
+fn mdv_cmd() -> Command {
+    let mut cmd = Command::new(mdv_bin());
+    with_coverage_env(&mut cmd);
+    cmd
+}
+
 fn temp_file(name: &str, content: &str) -> PathBuf {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -59,6 +71,7 @@ fn sh_quote(s: &str) -> String {
 fn spawn_script(command: &str) -> std::process::Child {
     let mut cmd = Command::new("script");
     cmd.arg("-qfec").arg(command).arg("/dev/null");
+    with_coverage_env(&mut cmd);
 
     cmd.stdin(Stdio::piped())
         .stdout(Stdio::null())
@@ -70,7 +83,7 @@ fn spawn_script(command: &str) -> std::process::Child {
 #[test]
 fn path_mode_non_tty_renders_once_and_exits() {
     let path = temp_file("non-tty", "# Title\nbody\n");
-    let child = Command::new(mdv_bin())
+    let child = mdv_cmd()
         .arg(&path)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -92,7 +105,7 @@ fn path_mode_non_tty_renders_once_and_exits() {
 
 #[test]
 fn stream_mode_reads_stdin_non_tty_and_exits() {
-    let mut child = Command::new(mdv_bin())
+    let mut child = mdv_cmd()
         .arg("--stream")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -119,7 +132,7 @@ fn stream_mode_reads_stdin_non_tty_and_exits() {
 
 #[test]
 fn stream_mode_invalid_utf8_hits_error_path_and_exits() {
-    let mut child = Command::new(mdv_bin())
+    let mut child = mdv_cmd()
         .arg("--stream")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -142,7 +155,7 @@ fn stream_mode_invalid_utf8_hits_error_path_and_exits() {
 #[test]
 fn stream_with_path_errors() {
     let path = temp_file("stream-path", "# x");
-    let output = Command::new(mdv_bin())
+    let output = mdv_cmd()
         .arg("--stream")
         .arg(path)
         .stdout(Stdio::piped())
@@ -159,7 +172,7 @@ fn stream_with_path_errors() {
 
 #[test]
 fn path_required_without_stream() {
-    let output = Command::new(mdv_bin())
+    let output = mdv_cmd()
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()
@@ -175,7 +188,7 @@ fn path_required_without_stream() {
 #[test]
 fn path_mode_force_tui_still_exits_non_interactive() {
     let path = temp_file("force-tui-path", "# title\nx");
-    let child = Command::new(mdv_bin())
+    let child = mdv_cmd()
         .arg(&path)
         .env("MDV_FORCE_TUI", "1")
         .stdin(Stdio::null())
@@ -189,7 +202,7 @@ fn path_mode_force_tui_still_exits_non_interactive() {
 
 #[test]
 fn stream_mode_force_tui_exits_after_stdin_close() {
-    let mut child = Command::new(mdv_bin())
+    let mut child = mdv_cmd()
         .arg("--stream")
         .env("MDV_FORCE_TUI", "1")
         .stdin(Stdio::piped())
@@ -208,7 +221,7 @@ fn stream_mode_force_tui_exits_after_stdin_close() {
 
 #[test]
 fn stream_mode_force_tui_invalid_utf8_hits_stream_error_branch() {
-    let mut child = Command::new(mdv_bin())
+    let mut child = mdv_cmd()
         .arg("--stream")
         .env("MDV_FORCE_TUI", "1")
         .stdin(Stdio::piped())
