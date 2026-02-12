@@ -1,5 +1,11 @@
 # @dhruv2mars/mdv
 
+## 0.0.16
+
+### Patch Changes
+
+- Fix runtime launcher crash on install path (`ReferenceError: join is not defined`) and add regression test.
+
 ## 0.0.15
 
 ### Patch Changes
