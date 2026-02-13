@@ -1,6 +1,7 @@
 pub fn help_lines() -> &'static [&'static str] {
     &[
         "Settings",
+        "Home: type path and press Enter to open",
         "Tab switch mode (editor/view)",
         "Ctrl+/ open/close settings | Esc close settings",
         "Ctrl+Q quit | Ctrl+S save | Ctrl+R reload",
