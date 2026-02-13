@@ -50,8 +50,10 @@ mod tests {
 
     #[test]
     fn split_adjust_and_reset() {
-        let mut ui = UiState::default();
-        ui.split_ratio = 50;
+        let mut ui = UiState {
+            split_ratio: 50,
+            ..UiState::default()
+        };
         apply_action(&mut ui, Action::AdjustSplit(-50), 120);
         assert_eq!(ui.split_ratio, 30);
         apply_action(&mut ui, Action::AdjustSplit(60), 120);

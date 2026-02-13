@@ -53,4 +53,23 @@ mod tests {
         assert!(out.starts_with("left"));
         assert!(out.ends_with("right"));
     }
+
+    #[test]
+    fn truncate_middle_handles_short_caps() {
+        assert_eq!(truncate_middle("abcdef", 3), "...");
+        assert_eq!(truncate_middle("abcdef", 2), "..");
+    }
+
+    #[test]
+    fn truncate_middle_returns_borrowed_when_no_truncation() {
+        let out = truncate_middle("abc", 10);
+        assert_eq!(out, "abc");
+        assert!(matches!(out, std::borrow::Cow::Borrowed(_)));
+    }
+
+    #[test]
+    fn compose_status_returns_left_when_no_space_or_empty_right() {
+        assert_eq!(compose_status("left", "", 20), "left");
+        assert_eq!(compose_status("left", "right", 8), "left");
+    }
 }

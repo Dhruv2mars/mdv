@@ -123,6 +123,23 @@ mod tests {
     }
 
     #[test]
+    fn vertical_layout_with_editor_focus_has_editor_on_top() {
+        let layout = compute_pane_layout(
+            Rect {
+                x: 1,
+                y: 2,
+                width: 90,
+                height: 30,
+            },
+            PaneFocus::Editor,
+            65,
+        );
+        assert_eq!(layout.kind, LayoutKind::Vertical);
+        assert!(layout.editor.y < layout.preview.y);
+        assert_eq!(layout.editor.x, 1);
+    }
+
+    #[test]
     fn uses_compact_layout_for_small_terminal() {
         let layout = compute_pane_layout(
             Rect {
@@ -136,5 +153,22 @@ mod tests {
         );
         assert_eq!(layout.kind, LayoutKind::Compact);
         assert_eq!(layout.preview.width, 0);
+    }
+
+    #[test]
+    fn compact_layout_with_preview_focus_hides_editor() {
+        let layout = compute_pane_layout(
+            Rect {
+                x: 0,
+                y: 0,
+                width: 70,
+                height: 23,
+            },
+            PaneFocus::Preview,
+            65,
+        );
+        assert_eq!(layout.kind, LayoutKind::Compact);
+        assert_eq!(layout.editor.width, 0);
+        assert_eq!(layout.preview.width, 70);
     }
 }

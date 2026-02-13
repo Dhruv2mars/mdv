@@ -142,6 +142,7 @@ fn monochrome_theme() -> ThemeTokens {
 #[cfg(test)]
 mod tests {
     use mdv_core::SegmentKind;
+    use ratatui::style::{Color, Modifier};
 
     use crate::app::state::ThemeChoice;
 
@@ -152,5 +153,55 @@ mod tests {
         let theme = build_theme(ThemeChoice::Default, true);
         let style = style_for_segment(&theme, SegmentKind::Heading);
         assert!(style.add_modifier.contains(ratatui::style::Modifier::BOLD));
+    }
+
+    #[test]
+    fn auto_and_default_themes_match() {
+        let auto = build_theme(ThemeChoice::Auto, false);
+        let default = build_theme(ThemeChoice::Default, false);
+        assert_eq!(auto.heading.fg, default.heading.fg);
+        assert_eq!(auto.link.fg, default.link.fg);
+    }
+
+    #[test]
+    fn high_contrast_theme_sets_bg_and_focus() {
+        let theme = build_theme(ThemeChoice::HighContrast, false);
+        assert_eq!(theme.top_bar.bg, Some(Color::Black));
+        assert_eq!(theme.status_warn.bg, Some(Color::Black));
+        assert!(theme.pane_focus.add_modifier.contains(Modifier::BOLD));
+    }
+
+    #[test]
+    fn no_color_overrides_selected_theme() {
+        let theme = build_theme(ThemeChoice::HighContrast, true);
+        assert_eq!(theme.plain.fg, None);
+        assert!(theme.top_bar.add_modifier.contains(Modifier::BOLD));
+        assert!(theme.link.add_modifier.contains(Modifier::UNDERLINED));
+    }
+
+    #[test]
+    fn style_for_segment_maps_all_kinds() {
+        let theme = build_theme(ThemeChoice::Default, false);
+        let kinds = [
+            SegmentKind::Plain,
+            SegmentKind::Heading,
+            SegmentKind::ListBullet,
+            SegmentKind::Link,
+            SegmentKind::Code,
+            SegmentKind::Quote,
+            SegmentKind::TableHeader,
+            SegmentKind::ConflictLocal,
+            SegmentKind::ConflictExternal,
+        ];
+
+        for kind in kinds {
+            let style = style_for_segment(&theme, kind);
+            match kind {
+                SegmentKind::Heading => assert_eq!(style.fg, Some(Color::Cyan)),
+                SegmentKind::Link => assert_eq!(style.fg, Some(Color::LightBlue)),
+                SegmentKind::Code => assert_eq!(style.fg, Some(Color::LightYellow)),
+                _ => assert!(style.fg.is_some() || !style.add_modifier.is_empty()),
+            }
+        }
     }
 }
