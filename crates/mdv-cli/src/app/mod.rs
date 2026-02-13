@@ -1894,6 +1894,7 @@ mod tests {
     };
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
+    use ratatui::style::Modifier;
 
     use crate::stream::StreamMessage;
     use crate::ui::theme::build_theme;
@@ -1902,7 +1903,8 @@ mod tests {
     use super::{
         App, InputEvent, PaneFocus, ThemeChoice, centered_popup, clamp_scroll, code_open_before,
         cursor_rect, mode_label, next_pressed_key, next_terminal_input, pane_border_style,
-        preview_title, status_line, status_style, styled_preview_line, to_lines, toggle_raw_mode,
+        preview_title, status_line, status_style, styled_editor_lines, styled_preview_line,
+        to_lines, toggle_raw_mode,
     };
 
     fn temp_path(name: &str) -> PathBuf {
@@ -2675,6 +2677,112 @@ mod tests {
     }
 
     #[test]
+    fn help_overlay_handles_esc_and_ctrl_q() {
+        let path = temp_path("help-close");
+        fs::write(&path, "x").expect("seed");
+        let mut app = App::new_file(path.clone(), false, false, false, "x".into()).expect("app");
+        let mut running = true;
+
+        app.ui.help_open = true;
+        app.handle_key(key(KeyCode::Esc, KeyModifiers::NONE), &mut running)
+            .expect("esc");
+        assert!(!app.ui.help_open);
+        assert_eq!(app.status, "Settings closed");
+        assert!(running);
+
+        app.ui.help_open = true;
+        app.handle_key(key(KeyCode::Char('q'), KeyModifiers::CONTROL), &mut running)
+            .expect("ctrl+q");
+        assert!(!app.ui.help_open);
+        assert!(!running);
+
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn home_mode_shortcuts_cover_query_controls() {
+        let mut app = App::new_home_for_test(false, false, false);
+        let mut running = true;
+
+        for c in "alpha beta".chars() {
+            app.handle_key(key(KeyCode::Char(c), KeyModifiers::NONE), &mut running)
+                .expect("type");
+        }
+        app.handle_key(key(KeyCode::Backspace, KeyModifiers::ALT), &mut running)
+            .expect("alt+backspace");
+        assert_eq!(app.home_query, "alpha ");
+
+        app.handle_key(key(KeyCode::Backspace, KeyModifiers::NONE), &mut running)
+            .expect("backspace");
+        assert_eq!(app.home_query, "alpha");
+
+        app.handle_key(key(KeyCode::Esc, KeyModifiers::NONE), &mut running)
+            .expect("esc");
+        assert_eq!(app.home_query, "");
+        assert_eq!(app.status, "Home: query cleared");
+
+        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE), &mut running)
+            .expect("enter empty");
+        assert_eq!(app.status, "Home: type a path");
+
+        app.handle_key(key(KeyCode::Char('x'), KeyModifiers::NONE), &mut running)
+            .expect("type x");
+        app.handle_key(key(KeyCode::Char('q'), KeyModifiers::CONTROL), &mut running)
+            .expect("ctrl+q");
+        assert!(!running);
+    }
+
+    #[test]
+    fn shift_arrows_and_plain_arrows_collapse_selection() {
+        let path = temp_path("selection-collapse");
+        fs::write(&path, "abc\ndef\nghi").expect("seed");
+        let mut app = App::new_file(path.clone(), false, false, false, "abc\ndef\nghi".into())
+            .expect("app");
+        let mut running = true;
+
+        app.editor.set_cursor(0);
+        app.handle_key(key(KeyCode::Right, KeyModifiers::SHIFT), &mut running)
+            .expect("shift right");
+        app.handle_key(key(KeyCode::Right, KeyModifiers::NONE), &mut running)
+            .expect("right collapse");
+        app.handle_key(key(KeyCode::Char('X'), KeyModifiers::NONE), &mut running)
+            .expect("insert x");
+        assert!(app.editor.text().starts_with("aXbc"));
+
+        app.editor.set_cursor(app.editor.text().len());
+        app.handle_key(key(KeyCode::Left, KeyModifiers::SHIFT), &mut running)
+            .expect("shift left");
+        app.handle_key(key(KeyCode::Left, KeyModifiers::NONE), &mut running)
+            .expect("left collapse");
+        let len_before = app.editor.text().len();
+        app.handle_key(key(KeyCode::Char('Y'), KeyModifiers::NONE), &mut running)
+            .expect("insert y");
+        assert_eq!(app.editor.text().len(), len_before + 1);
+
+        app.editor.set_cursor(0);
+        app.handle_key(key(KeyCode::Down, KeyModifiers::SHIFT), &mut running)
+            .expect("shift down");
+        app.handle_key(key(KeyCode::Down, KeyModifiers::NONE), &mut running)
+            .expect("down collapse");
+        let len_before = app.editor.text().len();
+        app.handle_key(key(KeyCode::Char('D'), KeyModifiers::NONE), &mut running)
+            .expect("insert d");
+        assert_eq!(app.editor.text().len(), len_before + 1);
+
+        app.editor.set_cursor(app.editor.text().len());
+        app.handle_key(key(KeyCode::Up, KeyModifiers::SHIFT), &mut running)
+            .expect("shift up");
+        app.handle_key(key(KeyCode::Up, KeyModifiers::NONE), &mut running)
+            .expect("up collapse");
+        let len_before = app.editor.text().len();
+        app.handle_key(key(KeyCode::Char('U'), KeyModifiers::NONE), &mut running)
+            .expect("insert u");
+        assert_eq!(app.editor.text().len(), len_before + 1);
+
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
     fn page_scroll_in_view_mode_moves_viewport_not_cursor() {
         let path = temp_path("view-scroll");
         let text = (0..80)
@@ -3102,6 +3210,11 @@ mod tests {
         assert_eq!(app.status_hint(), "replace: enter find");
 
         app.replace_find_mode = false;
+        app.replace_with_mode = true;
+        assert_eq!(mode_label(&app), "replace");
+        assert_eq!(app.status_hint(), "replace: enter with | Ctrl+A all");
+
+        app.replace_with_mode = false;
         app.ui.help_open = true;
         assert_eq!(app.status_hint(), "Esc close settings");
 
@@ -3193,5 +3306,33 @@ mod tests {
         assert_eq!(popup.height, 20);
         assert!(popup.x >= 1);
         assert!(popup.y >= 2);
+    }
+
+    #[test]
+    fn styled_editor_lines_marks_selected_span() {
+        let rendered = styled_editor_lines("hello", 0, 1, Some((1, 4)));
+        assert_eq!(rendered.len(), 1);
+        assert_eq!(rendered[0].spans.len(), 3);
+        assert_eq!(rendered[0].spans[0].content.as_ref(), "h");
+        assert_eq!(rendered[0].spans[1].content.as_ref(), "ell");
+        assert_eq!(rendered[0].spans[2].content.as_ref(), "o");
+        assert!(
+            rendered[0].spans[1]
+                .style
+                .add_modifier
+                .contains(Modifier::REVERSED)
+        );
+    }
+
+    #[test]
+    fn draw_renders_settings_popup_when_open() {
+        let mut app = App::new_stream_for_test(false);
+        app.ui.help_open = true;
+        let backend = TestBackend::new(100, 30);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+        terminal.draw(|frame| app.draw(frame)).expect("draw");
+        let rendered = terminal.backend().buffer().content();
+        assert!(rendered.iter().any(|cell| cell.symbol() == "S"));
+        assert!(rendered.iter().any(|cell| cell.symbol() == "e"));
     }
 }
