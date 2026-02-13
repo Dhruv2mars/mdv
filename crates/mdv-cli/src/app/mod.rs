@@ -14,7 +14,7 @@ use anyhow::Result;
 use crossterm::ExecutableCommand;
 use crossterm::event::{
     self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyModifiers,
-    MouseEventKind,
+    MouseButton, MouseEventKind,
 };
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -78,6 +78,10 @@ pub struct App {
     preview_cache: Option<PreviewCache>,
     ui: UiState,
     term_width: u16,
+    editor_area: Rect,
+    preview_area: Rect,
+    editor_text_area: Rect,
+    mouse_drag_anchor: Option<usize>,
     #[cfg(test)]
     test_next_key: Option<KeyEvent>,
     #[cfg(test)]
@@ -100,8 +104,21 @@ struct PreviewCache {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum InputEvent {
     Key(KeyEvent),
-    ScrollUp,
-    ScrollDown,
+    Scroll {
+        direction: i8,
+        column: u16,
+        row: u16,
+    },
+    MouseDown {
+        column: u16,
+        row: u16,
+        modifiers: KeyModifiers,
+    },
+    MouseDrag {
+        column: u16,
+        row: u16,
+    },
+    MouseUp,
 }
 
 impl App {
@@ -156,6 +173,10 @@ impl App {
             preview_cache: None,
             ui: UiState::default(),
             term_width: 120,
+            editor_area: Rect::default(),
+            preview_area: Rect::default(),
+            editor_text_area: Rect::default(),
+            mouse_drag_anchor: None,
             #[cfg(test)]
             test_next_key: None,
             #[cfg(test)]
@@ -208,6 +229,10 @@ impl App {
             preview_cache: None,
             ui: UiState::default(),
             term_width: 120,
+            editor_area: Rect::default(),
+            preview_area: Rect::default(),
+            editor_text_area: Rect::default(),
+            mouse_drag_anchor: None,
             #[cfg(test)]
             test_next_key: None,
             #[cfg(test)]
@@ -265,6 +290,10 @@ impl App {
             preview_cache: None,
             ui: UiState::default(),
             term_width: 120,
+            editor_area: Rect::default(),
+            preview_area: Rect::default(),
+            editor_text_area: Rect::default(),
+            mouse_drag_anchor: None,
             test_next_key: None,
             test_next_key_result: None,
             test_draw_error: None,
@@ -311,6 +340,10 @@ impl App {
             preview_cache: None,
             ui: UiState::default(),
             term_width: 120,
+            editor_area: Rect::default(),
+            preview_area: Rect::default(),
+            editor_text_area: Rect::default(),
+            mouse_drag_anchor: None,
             #[cfg(test)]
             test_next_key: None,
             #[cfg(test)]
@@ -424,8 +457,18 @@ impl App {
             {
                 match input_event {
                     InputEvent::Key(key) => self.handle_key(key, &mut running)?,
-                    InputEvent::ScrollUp => self.scroll_active_viewport(-1),
-                    InputEvent::ScrollDown => self.scroll_active_viewport(1),
+                    InputEvent::Scroll {
+                        direction,
+                        column,
+                        row,
+                    } => self.scroll_viewport_at(column, row, direction),
+                    InputEvent::MouseDown {
+                        column,
+                        row,
+                        modifiers,
+                    } => self.handle_mouse_down(column, row, modifiers),
+                    InputEvent::MouseDrag { column, row } => self.handle_mouse_drag(column, row),
+                    InputEvent::MouseUp => self.mouse_drag_anchor = None,
                 }
             }
         }
@@ -813,8 +856,14 @@ impl App {
                     self.editor.keep_local();
                     self.sync_conflict_hunk_selection();
                     self.status = "Kept local".into();
+                } else if !self.readonly {
+                    if !self.replace_selection("") {
+                        self.editor.delete_to_line_end();
+                    }
+                    self.sync_conflict_hunk_selection();
+                    self.status = "Deleted to line end".into();
                 } else {
-                    self.status = "No conflict to keep".into();
+                    self.status = "Readonly: edit disabled".into();
                 }
             }
             (KeyCode::Char('m'), KeyModifiers::CONTROL) => {
@@ -868,6 +917,15 @@ impl App {
                     self.status = "Nothing to redo".into();
                 }
             }
+            (KeyCode::Char('z'), KeyModifiers::SUPER | KeyModifiers::SHIFT) => {
+                self.clear_selection();
+                if self.editor.redo() {
+                    self.sync_conflict_hunk_selection();
+                    self.status = "Redo".into();
+                } else {
+                    self.status = "Nothing to redo".into();
+                }
+            }
             (KeyCode::F(3), KeyModifiers::NONE) | (KeyCode::Char('n'), KeyModifiers::CONTROL) => {
                 self.repeat_search_next();
             }
@@ -882,6 +940,87 @@ impl App {
             }
             (KeyCode::Char('e'), KeyModifiers::CONTROL) => {
                 self.apply_selected_conflict_hunk();
+            }
+            (KeyCode::Char('a'), mods)
+                if (mods.contains(KeyModifiers::CONTROL) || mods.contains(KeyModifiers::SUPER))
+                    && !mods.contains(KeyModifiers::ALT)
+                    && !mods.contains(KeyModifiers::SHIFT) =>
+            {
+                self.selection_anchor = Some(0);
+                self.editor.move_doc_end();
+                self.update_selection_after_move();
+            }
+            (KeyCode::Left, mods)
+                if mods == (KeyModifiers::SHIFT | KeyModifiers::ALT)
+                    || mods == (KeyModifiers::SHIFT | KeyModifiers::CONTROL) =>
+            {
+                self.start_selection();
+                self.editor.move_word_left();
+                self.update_selection_after_move();
+            }
+            (KeyCode::Right, mods)
+                if mods == (KeyModifiers::SHIFT | KeyModifiers::ALT)
+                    || mods == (KeyModifiers::SHIFT | KeyModifiers::CONTROL) =>
+            {
+                self.start_selection();
+                self.editor.move_word_right();
+                self.update_selection_after_move();
+            }
+            (KeyCode::Up, mods)
+                if mods == (KeyModifiers::SHIFT | KeyModifiers::ALT)
+                    || mods == (KeyModifiers::SHIFT | KeyModifiers::CONTROL) =>
+            {
+                self.start_selection();
+                self.editor.move_paragraph_up();
+                self.update_selection_after_move();
+            }
+            (KeyCode::Down, mods)
+                if mods == (KeyModifiers::SHIFT | KeyModifiers::ALT)
+                    || mods == (KeyModifiers::SHIFT | KeyModifiers::CONTROL) =>
+            {
+                self.start_selection();
+                self.editor.move_paragraph_down();
+                self.update_selection_after_move();
+            }
+            (KeyCode::Left, mods) if mods == (KeyModifiers::SHIFT | KeyModifiers::SUPER) => {
+                self.start_selection();
+                self.editor.move_line_start();
+                self.update_selection_after_move();
+            }
+            (KeyCode::Home, mods) if mods == KeyModifiers::SHIFT => {
+                self.start_selection();
+                self.editor.move_line_start();
+                self.update_selection_after_move();
+            }
+            (KeyCode::Right, mods) if mods == (KeyModifiers::SHIFT | KeyModifiers::SUPER) => {
+                self.start_selection();
+                self.editor.move_line_end();
+                self.update_selection_after_move();
+            }
+            (KeyCode::End, mods) if mods == KeyModifiers::SHIFT => {
+                self.start_selection();
+                self.editor.move_line_end();
+                self.update_selection_after_move();
+            }
+            (KeyCode::Up, mods) if mods == (KeyModifiers::SHIFT | KeyModifiers::SUPER) => {
+                self.start_selection();
+                self.editor.move_doc_start();
+                self.update_selection_after_move();
+            }
+            (KeyCode::Home, mods) if mods == (KeyModifiers::SHIFT | KeyModifiers::CONTROL) => {
+                self.start_selection();
+                self.editor.move_doc_start();
+                self.update_selection_after_move();
+            }
+            (KeyCode::Down, mods) if mods == (KeyModifiers::SHIFT | KeyModifiers::SUPER) => {
+                self.start_selection();
+                self.editor.move_doc_end();
+                self.update_selection_after_move();
+            }
+            (KeyCode::End, mods) if mods == (KeyModifiers::SHIFT | KeyModifiers::CONTROL) => {
+                self.start_selection();
+                self.editor.move_doc_end();
+                self.update_selection_after_move();
             }
             (KeyCode::Left, KeyModifiers::SHIFT) => {
                 self.start_selection();
@@ -902,6 +1041,88 @@ impl App {
                 self.start_selection();
                 self.editor.move_down();
                 self.update_selection_after_move();
+            }
+            (KeyCode::Left, mods) if mods == KeyModifiers::ALT || mods == KeyModifiers::CONTROL => {
+                if let Some((start, _)) = self.selection_range() {
+                    self.editor.set_cursor(start);
+                    self.clear_selection();
+                } else {
+                    self.editor.move_word_left();
+                }
+            }
+            (KeyCode::Right, mods)
+                if mods == KeyModifiers::ALT || mods == KeyModifiers::CONTROL =>
+            {
+                if let Some((_, end)) = self.selection_range() {
+                    self.editor.set_cursor(end);
+                    self.clear_selection();
+                } else {
+                    self.editor.move_word_right();
+                }
+            }
+            (KeyCode::Up, mods) if mods == KeyModifiers::ALT || mods == KeyModifiers::CONTROL => {
+                if let Some((start, _)) = self.selection_range() {
+                    self.editor.set_cursor(start);
+                    self.clear_selection();
+                } else {
+                    self.editor.move_paragraph_up();
+                }
+            }
+            (KeyCode::Down, mods) if mods == KeyModifiers::ALT || mods == KeyModifiers::CONTROL => {
+                if let Some((_, end)) = self.selection_range() {
+                    self.editor.set_cursor(end);
+                    self.clear_selection();
+                } else {
+                    self.editor.move_paragraph_down();
+                }
+            }
+            (KeyCode::Left, mods) if mods == KeyModifiers::SUPER => {
+                if let Some((start, _)) = self.selection_range() {
+                    self.editor.set_cursor(start);
+                    self.clear_selection();
+                } else {
+                    self.editor.move_line_start();
+                }
+            }
+            (KeyCode::Home, mods) if mods == KeyModifiers::NONE => {
+                if let Some((start, _)) = self.selection_range() {
+                    self.editor.set_cursor(start);
+                    self.clear_selection();
+                } else {
+                    self.editor.move_line_start();
+                }
+            }
+            (KeyCode::Right, mods) if mods == KeyModifiers::SUPER => {
+                if let Some((_, end)) = self.selection_range() {
+                    self.editor.set_cursor(end);
+                    self.clear_selection();
+                } else {
+                    self.editor.move_line_end();
+                }
+            }
+            (KeyCode::End, mods) if mods == KeyModifiers::NONE => {
+                if let Some((_, end)) = self.selection_range() {
+                    self.editor.set_cursor(end);
+                    self.clear_selection();
+                } else {
+                    self.editor.move_line_end();
+                }
+            }
+            (KeyCode::Up, mods) if mods == KeyModifiers::SUPER => {
+                self.clear_selection();
+                self.editor.move_doc_start();
+            }
+            (KeyCode::Home, mods) if mods == KeyModifiers::CONTROL => {
+                self.clear_selection();
+                self.editor.move_doc_start();
+            }
+            (KeyCode::Down, mods) if mods == KeyModifiers::SUPER => {
+                self.clear_selection();
+                self.editor.move_doc_end();
+            }
+            (KeyCode::End, mods) if mods == KeyModifiers::CONTROL => {
+                self.clear_selection();
+                self.editor.move_doc_end();
             }
             (KeyCode::Left, _) => {
                 if let Some((start, _)) = self.selection_range() {
@@ -960,10 +1181,36 @@ impl App {
                     self.sync_conflict_hunk_selection();
                 }
             }
-            (KeyCode::Backspace, mods)
+            (KeyCode::Delete, mods)
                 if mods.contains(KeyModifiers::SUPER)
                     || mods.contains(KeyModifiers::ALT)
                     || mods.contains(KeyModifiers::CONTROL) =>
+            {
+                if !self.readonly {
+                    if !self.replace_selection("") {
+                        self.editor.delete_word_forward();
+                    }
+                    self.sync_conflict_hunk_selection();
+                }
+            }
+            (KeyCode::Delete, _) => {
+                if !self.readonly {
+                    if !self.replace_selection("") {
+                        self.editor.delete_forward();
+                    }
+                    self.sync_conflict_hunk_selection();
+                }
+            }
+            (KeyCode::Backspace, mods) if mods.contains(KeyModifiers::SUPER) => {
+                if !self.readonly {
+                    if !self.replace_selection("") {
+                        self.editor.delete_to_line_start();
+                    }
+                    self.sync_conflict_hunk_selection();
+                }
+            }
+            (KeyCode::Backspace, mods)
+                if mods.contains(KeyModifiers::ALT) || mods.contains(KeyModifiers::CONTROL) =>
             {
                 if !self.readonly {
                     if !self.replace_selection("") {
@@ -1104,19 +1351,39 @@ impl App {
     }
 
     fn scroll_active_viewport(&mut self, direction: i8) {
-        let amount = SCROLL_STEP_LINES;
         if self.ui.focus == PaneFocus::Editor {
-            let total = to_lines(self.editor.text()).len();
-            if direction < 0 {
-                self.editor_scroll = self.editor_scroll.saturating_sub(amount);
-            } else {
-                self.editor_scroll = self.editor_scroll.saturating_add(amount);
-            }
-            self.editor_scroll = clamp_scroll(self.editor_scroll, total, self.editor_height.max(1));
+            self.scroll_editor(direction);
             return;
         }
+        self.scroll_preview(direction);
+    }
 
-        let preview_width = self.term_width.saturating_sub(2).max(1);
+    fn scroll_viewport_at(&mut self, column: u16, row: u16, direction: i8) {
+        if point_in_rect(column, row, self.editor_area) {
+            self.scroll_editor(direction);
+            return;
+        }
+        if point_in_rect(column, row, self.preview_area) {
+            self.scroll_preview(direction);
+            return;
+        }
+        self.scroll_active_viewport(direction);
+    }
+
+    fn scroll_editor(&mut self, direction: i8) {
+        let amount = SCROLL_STEP_LINES;
+        let total = to_lines(self.editor.text()).len();
+        if direction < 0 {
+            self.editor_scroll = self.editor_scroll.saturating_sub(amount);
+        } else {
+            self.editor_scroll = self.editor_scroll.saturating_add(amount);
+        }
+        self.editor_scroll = clamp_scroll(self.editor_scroll, total, self.editor_height.max(1));
+    }
+
+    fn scroll_preview(&mut self, direction: i8) {
+        let amount = SCROLL_STEP_LINES;
+        let preview_width = self.preview_area.width.saturating_sub(2).max(1);
         let (preview_lines, _) = self.preview_lines_cached(preview_width);
         if direction < 0 {
             self.preview_scroll = self.preview_scroll.saturating_sub(amount);
@@ -1128,6 +1395,67 @@ impl App {
             preview_lines.len(),
             self.preview_height.max(1),
         );
+    }
+
+    fn handle_mouse_down(&mut self, column: u16, row: u16, modifiers: KeyModifiers) {
+        if self.home_mode || self.ui.help_open {
+            return;
+        }
+        if point_in_rect(column, row, self.preview_area) {
+            self.ui.focus = PaneFocus::Preview;
+        }
+        if point_in_rect(column, row, self.editor_area) {
+            self.ui.focus = PaneFocus::Editor;
+        }
+        if self.ui.focus != PaneFocus::Editor {
+            return;
+        }
+        if !point_in_rect(column, row, self.editor_text_area) {
+            return;
+        }
+
+        let prior_cursor = self.editor.cursor();
+        if !self.set_editor_cursor_from_mouse(column, row) {
+            return;
+        }
+
+        if modifiers.contains(KeyModifiers::SHIFT) {
+            if self.selection_anchor.is_none() {
+                self.selection_anchor = Some(prior_cursor);
+            }
+        } else {
+            self.clear_selection();
+        }
+
+        self.mouse_drag_anchor = Some(self.selection_anchor.unwrap_or(self.editor.cursor()));
+        self.update_selection_after_move();
+        self.ensure_cursor_visible();
+    }
+
+    fn handle_mouse_drag(&mut self, column: u16, row: u16) {
+        if self.ui.focus != PaneFocus::Editor || self.home_mode || self.ui.help_open {
+            return;
+        }
+        let Some(anchor) = self.mouse_drag_anchor else {
+            return;
+        };
+        if !self.set_editor_cursor_from_mouse(column, row) {
+            return;
+        }
+        self.selection_anchor = Some(anchor);
+        self.update_selection_after_move();
+        self.ensure_cursor_visible();
+    }
+
+    fn set_editor_cursor_from_mouse(&mut self, column: u16, row: u16) -> bool {
+        if !point_in_rect(column, row, self.editor_text_area) {
+            return false;
+        }
+        let rel_line = row.saturating_sub(self.editor_text_area.y) as usize;
+        let rel_col = column.saturating_sub(self.editor_text_area.x) as usize;
+        let line = self.editor_scroll.saturating_add(rel_line);
+        self.editor.set_cursor_line_col(line, rel_col);
+        true
     }
 
     fn clear_replace_mode(&mut self) {
@@ -1394,6 +1722,9 @@ impl App {
 
         let pane_layout = compute_pane_layout(vertical[1], self.ui.focus);
         let compact = pane_layout.kind == LayoutKind::Compact;
+        self.editor_area = pane_layout.editor;
+        self.preview_area = pane_layout.preview;
+        self.editor_text_area = Rect::default();
 
         if self.home_mode {
             self.draw_home(frame, vertical[1], &theme);
@@ -1401,6 +1732,7 @@ impl App {
             if pane_layout.editor.width > 0 && pane_layout.editor.height > 0 {
                 let editor_height = pane_layout.editor.height.saturating_sub(2) as usize;
                 self.editor_height = editor_height.max(1);
+                self.editor_text_area = cursor_rect(pane_layout.editor);
                 let editor_lines = to_lines(self.editor.text());
                 self.editor_scroll =
                     clamp_scroll(self.editor_scroll, editor_lines.len(), self.editor_height);
@@ -1409,6 +1741,8 @@ impl App {
                     self.editor_scroll,
                     self.editor_height,
                     self.selection_range(),
+                    pane_layout.editor.width.saturating_sub(2),
+                    &theme,
                 );
 
                 let editor_border = pane_border_style(&theme, self.ui.focus == PaneFocus::Editor);
@@ -1535,7 +1869,7 @@ impl App {
             Line::from(Span::styled("Open Markdown File", theme.heading)),
             Line::from(format!("Path: {}", self.home_query)),
             Line::from(""),
-            Line::from("Enter open | Ctrl+/ settings | Ctrl+Q quit"),
+            Line::from("Enter open | Cmd+,/Ctrl+, settings | Ctrl+Q quit"),
             Line::from("Tip: Use --focus view to start in preview mode"),
         ];
         let home = Paragraph::new(lines).block(
@@ -1591,9 +1925,9 @@ impl App {
         } else if self.ui.help_open {
             "Esc close settings"
         } else if self.ui.focus == PaneFocus::Editor && !self.readonly && !self.stream_mode {
-            "Tab indent | Shift+Arrows select | Cmd/Alt+Backspace word | Ctrl+T mode"
+            "Tab indent | Shift+Arrows select | Cmd/Alt+Backspace word | Shift+Tab mode"
         } else {
-            "Ctrl+T mode | Ctrl+/ settings"
+            "Shift+Tab mode | Cmd+,/Ctrl+, settings"
         };
 
         if let Some(conflict) = self.editor.conflict()
@@ -1778,8 +2112,11 @@ fn styled_editor_lines(
     scroll: usize,
     height: usize,
     selection: Option<(usize, usize)>,
+    width: u16,
+    theme: &ThemeTokens,
 ) -> Vec<Line<'static>> {
     let lines = to_lines(text);
+    let mut in_code = code_open_before(&lines, scroll);
     let mut line_starts = Vec::with_capacity(lines.len());
     let mut idx = 0usize;
     for (i, line) in lines.iter().enumerate() {
@@ -1797,35 +2134,67 @@ fn styled_editor_lines(
         .skip(scroll)
         .take(height)
         .map(|(line_idx, line)| {
+            let base = styled_preview_line(line, width, theme, &mut in_code);
             let Some((sel_start, sel_end)) = selection else {
-                return Line::from(Span::raw(line.clone()));
+                return base;
             };
             let line_start = line_starts[line_idx];
             let line_end = line_start + line.len();
             if sel_end <= line_start || sel_start >= line_end {
-                return Line::from(Span::raw(line.clone()));
+                return base;
             }
 
-            let mut spans = Vec::new();
             let local_start = sel_start.saturating_sub(line_start).min(line.len());
             let local_end = sel_end.saturating_sub(line_start).min(line.len());
-
-            if local_start > 0 {
-                spans.push(Span::raw(line[..local_start].to_string()));
-            }
-            if local_end > local_start {
-                spans.push(Span::styled(
-                    line[local_start..local_end].to_string(),
-                    selected_style,
-                ));
-            }
-            if local_end < line.len() {
-                spans.push(Span::raw(line[local_end..].to_string()));
-            }
-
+            let spans =
+                apply_selection_to_styled_spans(base.spans, local_start, local_end, selected_style);
             Line::from(spans)
         })
         .collect()
+}
+
+fn apply_selection_to_styled_spans(
+    spans: Vec<Span<'static>>,
+    local_start: usize,
+    local_end: usize,
+    selected_style: Style,
+) -> Vec<Span<'static>> {
+    let mut out = Vec::new();
+    let mut offset = 0usize;
+
+    for span in spans {
+        let content = span.content.to_string();
+        let span_len = content.len();
+        let span_start = offset;
+        let span_end = span_start + span_len;
+        offset = span_end;
+
+        if local_end <= span_start || local_start >= span_end {
+            out.push(span);
+            continue;
+        }
+
+        let rel_start = local_start.saturating_sub(span_start).min(span_len);
+        let rel_end = local_end.saturating_sub(span_start).min(span_len);
+        let style = span.style;
+        if rel_start > 0 {
+            out.push(Span::styled(content[..rel_start].to_string(), style));
+        }
+        if rel_end > rel_start {
+            out.push(Span::styled(
+                content[rel_start..rel_end].to_string(),
+                style.patch(selected_style),
+            ));
+        }
+        if rel_end < span_len {
+            out.push(Span::styled(content[rel_end..].to_string(), style));
+        }
+    }
+
+    if out.is_empty() {
+        out.push(Span::raw(String::new()));
+    }
+    out
 }
 
 fn cursor_rect(area: Rect) -> Rect {
@@ -1835,6 +2204,16 @@ fn cursor_rect(area: Rect) -> Rect {
         width: area.width.saturating_sub(2),
         height: area.height.saturating_sub(2),
     }
+}
+
+fn point_in_rect(column: u16, row: u16, rect: Rect) -> bool {
+    if rect.width == 0 || rect.height == 0 {
+        return false;
+    }
+    column >= rect.x
+        && column < rect.x.saturating_add(rect.width)
+        && row >= rect.y
+        && row < rect.y.saturating_add(rect.height)
 }
 
 fn toggle_raw_mode<F>(interactive: bool, mut f: F) -> Result<()>
@@ -1859,10 +2238,34 @@ where
     match event {
         Event::Key(key) if key.kind == event::KeyEventKind::Press => Ok(Some(InputEvent::Key(key))),
         Event::Mouse(mouse) if mouse.kind == MouseEventKind::ScrollUp => {
-            Ok(Some(InputEvent::ScrollUp))
+            Ok(Some(InputEvent::Scroll {
+                direction: -1,
+                column: mouse.column,
+                row: mouse.row,
+            }))
         }
         Event::Mouse(mouse) if mouse.kind == MouseEventKind::ScrollDown => {
-            Ok(Some(InputEvent::ScrollDown))
+            Ok(Some(InputEvent::Scroll {
+                direction: 1,
+                column: mouse.column,
+                row: mouse.row,
+            }))
+        }
+        Event::Mouse(mouse) if mouse.kind == MouseEventKind::Down(MouseButton::Left) => {
+            Ok(Some(InputEvent::MouseDown {
+                column: mouse.column,
+                row: mouse.row,
+                modifiers: mouse.modifiers,
+            }))
+        }
+        Event::Mouse(mouse) if mouse.kind == MouseEventKind::Drag(MouseButton::Left) => {
+            Ok(Some(InputEvent::MouseDrag {
+                column: mouse.column,
+                row: mouse.row,
+            }))
+        }
+        Event::Mouse(mouse) if mouse.kind == MouseEventKind::Up(MouseButton::Left) => {
+            Ok(Some(InputEvent::MouseUp))
         }
         _ => Ok(None),
     }
@@ -1889,8 +2292,8 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use crossterm::event::{
-        Event, KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers, MouseEvent,
-        MouseEventKind,
+        Event, KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers, MouseButton,
+        MouseEvent, MouseEventKind,
     };
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
@@ -2285,16 +2688,19 @@ mod tests {
     }
 
     #[test]
-    fn handle_key_conflict_actions_no_conflict_status() {
+    fn handle_key_ctrl_k_deletes_line_end_when_not_conflicted() {
         let path = temp_path("no-conflict-actions");
-        fs::write(&path, "x").expect("seed");
-        let mut app = App::new_file(path.clone(), false, false, false, "x".into()).expect("app");
+        fs::write(&path, "abc\ndef").expect("seed");
+        let mut app =
+            App::new_file(path.clone(), false, false, false, "abc\ndef".into()).expect("app");
         app.interactive_input = false;
         let mut running = true;
 
+        app.editor.set_cursor(1);
         app.handle_key(key(KeyCode::Char('k'), KeyModifiers::CONTROL), &mut running)
-            .expect("keep");
-        assert_eq!(app.status, "No conflict to keep");
+            .expect("delete line end");
+        assert_eq!(app.editor.text(), "a\ndef");
+        assert_eq!(app.status, "Deleted to line end");
 
         app.handle_key(key(KeyCode::Char('m'), KeyModifiers::CONTROL), &mut running)
             .expect("merge");
@@ -2574,15 +2980,15 @@ mod tests {
     }
 
     #[test]
-    fn tab_switches_mode_and_updates_status() {
+    fn shift_tab_switches_mode_and_updates_status() {
         let path = temp_path("mode-toggle");
         fs::write(&path, "x").expect("seed");
         let mut app = App::new_file(path.clone(), false, false, false, "x".into()).expect("app");
         app.set_initial_focus(PaneFocus::Preview);
         let mut running = true;
 
-        app.handle_key(key(KeyCode::Tab, KeyModifiers::NONE), &mut running)
-            .expect("tab");
+        app.handle_key(key(KeyCode::BackTab, KeyModifiers::SHIFT), &mut running)
+            .expect("shift+tab");
 
         assert_eq!(app.status, "Mode: editor");
 
@@ -2659,7 +3065,7 @@ mod tests {
         let mut app = App::new_file(path.clone(), false, false, false, "x".into()).expect("app");
         let mut running = true;
 
-        app.handle_key(key(KeyCode::Char('/'), KeyModifiers::CONTROL), &mut running)
+        app.handle_key(key(KeyCode::Char(','), KeyModifiers::CONTROL), &mut running)
             .expect("open settings");
         assert_eq!(app.status, "Settings opened");
 
@@ -2667,11 +3073,260 @@ mod tests {
             .expect("type while settings open");
         assert_eq!(app.editor.text(), "x");
 
-        app.handle_key(key(KeyCode::Char('/'), KeyModifiers::CONTROL), &mut running)
+        app.handle_key(key(KeyCode::Char(','), KeyModifiers::CONTROL), &mut running)
             .expect("close settings");
         app.handle_key(key(KeyCode::Char('z'), KeyModifiers::NONE), &mut running)
             .expect("type after close");
         assert_eq!(app.editor.text(), "xz");
+
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn settings_shortcut_is_ctrl_comma_not_ctrl_slash() {
+        let path = temp_path("settings-key");
+        fs::write(&path, "x").expect("seed");
+        let mut app = App::new_file(path.clone(), false, false, false, "x".into()).expect("app");
+        let mut running = true;
+
+        app.handle_key(key(KeyCode::Char('/'), KeyModifiers::CONTROL), &mut running)
+            .expect("ctrl slash");
+        assert!(!app.ui.help_open);
+
+        app.handle_key(key(KeyCode::Char(','), KeyModifiers::CONTROL), &mut running)
+            .expect("ctrl comma");
+        assert!(app.ui.help_open);
+
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn keyboard_word_line_doc_shortcuts_work() {
+        let path = temp_path("word-line-doc");
+        fs::write(&path, "one two\nthree four\n\nfive").expect("seed");
+        let mut app = App::new_file(
+            path.clone(),
+            false,
+            false,
+            false,
+            "one two\nthree four\n\nfive".into(),
+        )
+        .expect("app");
+        let mut running = true;
+
+        app.handle_key(key(KeyCode::Left, KeyModifiers::ALT), &mut running)
+            .expect("alt left");
+        assert_eq!(app.editor.line_col_at_cursor(), (3, 0));
+        app.handle_key(key(KeyCode::Right, KeyModifiers::ALT), &mut running)
+            .expect("alt right");
+        assert_eq!(app.editor.line_col_at_cursor(), (3, 4));
+
+        app.handle_key(key(KeyCode::Home, KeyModifiers::NONE), &mut running)
+            .expect("home");
+        assert_eq!(app.editor.line_col_at_cursor(), (3, 0));
+        app.handle_key(key(KeyCode::End, KeyModifiers::NONE), &mut running)
+            .expect("end");
+        assert_eq!(app.editor.line_col_at_cursor(), (3, 4));
+
+        app.handle_key(key(KeyCode::Up, KeyModifiers::SUPER), &mut running)
+            .expect("cmd up");
+        assert_eq!(app.editor.cursor(), 0);
+        app.handle_key(key(KeyCode::Down, KeyModifiers::SUPER), &mut running)
+            .expect("cmd down");
+        assert_eq!(app.editor.cursor(), app.editor.text().len());
+
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn word_selection_and_forward_delete_shortcuts_work() {
+        let path = temp_path("selection-forward-delete");
+        fs::write(&path, "alpha beta").expect("seed");
+        let mut app =
+            App::new_file(path.clone(), false, false, false, "alpha beta".into()).expect("app");
+        let mut running = true;
+
+        app.handle_key(
+            key(KeyCode::Left, KeyModifiers::SHIFT | KeyModifiers::ALT),
+            &mut running,
+        )
+        .expect("shift+alt left");
+        app.handle_key(key(KeyCode::Char('X'), KeyModifiers::SHIFT), &mut running)
+            .expect("replace selected word");
+        assert_eq!(app.editor.text(), "alpha X");
+
+        app.editor.set_cursor(0);
+        app.handle_key(key(KeyCode::Delete, KeyModifiers::NONE), &mut running)
+            .expect("delete forward");
+        assert_eq!(app.editor.text(), "lpha X");
+
+        app.handle_key(key(KeyCode::Delete, KeyModifiers::CONTROL), &mut running)
+            .expect("ctrl delete word");
+        assert_eq!(app.editor.text(), " X");
+
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn advanced_navigation_shortcuts_cover_selection_and_collapse_paths() {
+        let path = temp_path("advanced-nav");
+        let text = "one two\nthree four\n\nfive six".to_string();
+        fs::write(&path, &text).expect("seed");
+        let mut app = App::new_file(path.clone(), false, false, false, text).expect("app");
+        let mut running = true;
+
+        app.handle_key(key(KeyCode::Char('a'), KeyModifiers::CONTROL), &mut running)
+            .expect("ctrl+a");
+        assert_eq!(app.selection_range(), Some((0, app.editor.text().len())));
+        app.clear_selection();
+
+        app.editor.set_cursor(app.editor.text().len());
+        app.handle_key(
+            key(KeyCode::Left, KeyModifiers::SHIFT | KeyModifiers::CONTROL),
+            &mut running,
+        )
+        .expect("shift+ctrl+left");
+        app.handle_key(
+            key(KeyCode::Right, KeyModifiers::SHIFT | KeyModifiers::ALT),
+            &mut running,
+        )
+        .expect("shift+alt+right");
+
+        app.handle_key(
+            key(KeyCode::Up, KeyModifiers::SHIFT | KeyModifiers::ALT),
+            &mut running,
+        )
+        .expect("shift+alt+up");
+        app.handle_key(
+            key(KeyCode::Down, KeyModifiers::SHIFT | KeyModifiers::CONTROL),
+            &mut running,
+        )
+        .expect("shift+ctrl+down");
+
+        app.handle_key(
+            key(KeyCode::Left, KeyModifiers::SHIFT | KeyModifiers::SUPER),
+            &mut running,
+        )
+        .expect("shift+cmd+left");
+        app.handle_key(key(KeyCode::Home, KeyModifiers::SHIFT), &mut running)
+            .expect("shift+home");
+        app.handle_key(
+            key(KeyCode::Right, KeyModifiers::SHIFT | KeyModifiers::SUPER),
+            &mut running,
+        )
+        .expect("shift+cmd+right");
+        app.handle_key(key(KeyCode::End, KeyModifiers::SHIFT), &mut running)
+            .expect("shift+end");
+
+        app.handle_key(
+            key(KeyCode::Up, KeyModifiers::SHIFT | KeyModifiers::SUPER),
+            &mut running,
+        )
+        .expect("shift+cmd+up");
+        app.handle_key(
+            key(KeyCode::Home, KeyModifiers::SHIFT | KeyModifiers::CONTROL),
+            &mut running,
+        )
+        .expect("shift+ctrl+home");
+        app.handle_key(
+            key(KeyCode::Down, KeyModifiers::SHIFT | KeyModifiers::SUPER),
+            &mut running,
+        )
+        .expect("shift+cmd+down");
+        app.handle_key(
+            key(KeyCode::End, KeyModifiers::SHIFT | KeyModifiers::CONTROL),
+            &mut running,
+        )
+        .expect("shift+ctrl+end");
+
+        app.selection_anchor = Some(1);
+        app.editor.set_cursor(6);
+        app.handle_key(key(KeyCode::Left, KeyModifiers::ALT), &mut running)
+            .expect("alt left collapse");
+        app.selection_anchor = Some(1);
+        app.editor.set_cursor(6);
+        app.handle_key(key(KeyCode::Right, KeyModifiers::CONTROL), &mut running)
+            .expect("ctrl right collapse");
+        app.selection_anchor = Some(1);
+        app.editor.set_cursor(6);
+        app.handle_key(key(KeyCode::Up, KeyModifiers::ALT), &mut running)
+            .expect("alt up collapse");
+        app.selection_anchor = Some(1);
+        app.editor.set_cursor(6);
+        app.handle_key(key(KeyCode::Down, KeyModifiers::CONTROL), &mut running)
+            .expect("ctrl down collapse");
+        app.selection_anchor = Some(1);
+        app.editor.set_cursor(6);
+        app.handle_key(key(KeyCode::Left, KeyModifiers::SUPER), &mut running)
+            .expect("cmd left collapse");
+        app.selection_anchor = Some(1);
+        app.editor.set_cursor(6);
+        app.handle_key(key(KeyCode::Home, KeyModifiers::NONE), &mut running)
+            .expect("home collapse");
+        app.selection_anchor = Some(1);
+        app.editor.set_cursor(6);
+        app.handle_key(key(KeyCode::Right, KeyModifiers::SUPER), &mut running)
+            .expect("cmd right collapse");
+        app.selection_anchor = Some(1);
+        app.editor.set_cursor(6);
+        app.handle_key(key(KeyCode::End, KeyModifiers::NONE), &mut running)
+            .expect("end collapse");
+
+        app.handle_key(key(KeyCode::Up, KeyModifiers::SUPER), &mut running)
+            .expect("cmd up");
+        app.handle_key(key(KeyCode::Home, KeyModifiers::CONTROL), &mut running)
+            .expect("ctrl home");
+        app.handle_key(key(KeyCode::Down, KeyModifiers::SUPER), &mut running)
+            .expect("cmd down");
+        app.handle_key(key(KeyCode::End, KeyModifiers::CONTROL), &mut running)
+            .expect("ctrl end");
+
+        app.handle_key(
+            key(
+                KeyCode::Char('z'),
+                KeyModifiers::SUPER | KeyModifiers::SHIFT,
+            ),
+            &mut running,
+        )
+        .expect("cmd+shift+z");
+
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn delete_shortcuts_cover_forward_word_and_line_start_paths() {
+        let path = temp_path("delete-shortcuts");
+        fs::write(&path, "alpha beta\ngamma delta").expect("seed");
+        let mut app = App::new_file(
+            path.clone(),
+            false,
+            false,
+            false,
+            "alpha beta\ngamma delta".into(),
+        )
+        .expect("app");
+        let mut running = true;
+
+        app.editor.set_cursor(0);
+        app.handle_key(key(KeyCode::Delete, KeyModifiers::CONTROL), &mut running)
+            .expect("ctrl delete");
+        app.handle_key(key(KeyCode::Delete, KeyModifiers::NONE), &mut running)
+            .expect("delete");
+        app.editor.set_cursor(5);
+        app.handle_key(key(KeyCode::Backspace, KeyModifiers::SUPER), &mut running)
+            .expect("cmd backspace");
+        app.editor.set_cursor(app.editor.text().len());
+        app.handle_key(key(KeyCode::Backspace, KeyModifiers::ALT), &mut running)
+            .expect("alt backspace");
+
+        app.editor.set_cursor(2);
+        app.selection_anchor = Some(0);
+        app.handle_key(key(KeyCode::Delete, KeyModifiers::NONE), &mut running)
+            .expect("delete selection");
+        app.editor.set_cursor(2);
+        app.selection_anchor = Some(0);
+        app.handle_key(key(KeyCode::Backspace, KeyModifiers::CONTROL), &mut running)
+            .expect("backspace selection");
 
         let _ = fs::remove_file(&path);
     }
@@ -2826,6 +3481,33 @@ mod tests {
     }
 
     #[test]
+    fn mouse_click_and_drag_updates_cursor_and_selection() {
+        let path = temp_path("mouse-select");
+        fs::write(&path, "hello world").expect("seed");
+        let mut app =
+            App::new_file(path.clone(), false, false, false, "hello world".into()).expect("app");
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
+        terminal.draw(|frame| app.draw(frame)).expect("draw");
+
+        let y = app.editor_text_area.y;
+        let x_start = app.editor_text_area.x + 2;
+        let x_end = app.editor_text_area.x + 6;
+
+        app.handle_mouse_down(x_start, y, KeyModifiers::NONE);
+        assert_eq!(app.editor.line_col_at_cursor(), (0, 2));
+        assert!(app.selection_range().is_none());
+
+        app.handle_mouse_drag(x_end, y);
+        assert_eq!(app.editor.line_col_at_cursor(), (0, 6));
+        assert_eq!(app.selection_range(), Some((2, 6)));
+
+        app.handle_mouse_down(x_end, y, KeyModifiers::SHIFT);
+        assert_eq!(app.selection_range(), Some((2, 6)));
+
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
     fn run_loop_handles_stream_done_non_interactive() {
         let mut app = App::new_stream_for_test(false);
         app.interactive_input = false;
@@ -2943,7 +3625,14 @@ mod tests {
             },
         )
         .expect("scroll up");
-        assert_eq!(up, Some(InputEvent::ScrollUp));
+        assert_eq!(
+            up,
+            Some(InputEvent::Scroll {
+                direction: -1,
+                column: 1,
+                row: 1
+            })
+        );
 
         let down = next_terminal_input(
             |_| Ok(true),
@@ -2957,7 +3646,63 @@ mod tests {
             },
         )
         .expect("scroll down");
-        assert_eq!(down, Some(InputEvent::ScrollDown));
+        assert_eq!(
+            down,
+            Some(InputEvent::Scroll {
+                direction: 1,
+                column: 1,
+                row: 1
+            })
+        );
+
+        let down_click = next_terminal_input(
+            |_| Ok(true),
+            || {
+                Ok(Event::Mouse(MouseEvent {
+                    kind: MouseEventKind::Down(MouseButton::Left),
+                    column: 2,
+                    row: 3,
+                    modifiers: KeyModifiers::SHIFT,
+                }))
+            },
+        )
+        .expect("mouse down");
+        assert_eq!(
+            down_click,
+            Some(InputEvent::MouseDown {
+                column: 2,
+                row: 3,
+                modifiers: KeyModifiers::SHIFT
+            })
+        );
+
+        let drag = next_terminal_input(
+            |_| Ok(true),
+            || {
+                Ok(Event::Mouse(MouseEvent {
+                    kind: MouseEventKind::Drag(MouseButton::Left),
+                    column: 4,
+                    row: 5,
+                    modifiers: KeyModifiers::NONE,
+                }))
+            },
+        )
+        .expect("mouse drag");
+        assert_eq!(drag, Some(InputEvent::MouseDrag { column: 4, row: 5 }));
+
+        let up_release = next_terminal_input(
+            |_| Ok(true),
+            || {
+                Ok(Event::Mouse(MouseEvent {
+                    kind: MouseEventKind::Up(MouseButton::Left),
+                    column: 4,
+                    row: 5,
+                    modifiers: KeyModifiers::NONE,
+                }))
+            },
+        )
+        .expect("mouse up");
+        assert_eq!(up_release, Some(InputEvent::MouseUp));
     }
 
     #[test]
@@ -3193,7 +3938,7 @@ mod tests {
     fn helper_mode_and_status_branches() {
         let mut app = App::new_stream_for_test(false);
         assert_eq!(mode_label(&app), "stream");
-        assert_eq!(app.status_hint(), "Ctrl+T mode | Ctrl+/ settings");
+        assert_eq!(app.status_hint(), "Shift+Tab mode | Cmd+,/Ctrl+, settings");
 
         app.search_mode = true;
         assert_eq!(mode_label(&app), "search");
@@ -3310,7 +4055,8 @@ mod tests {
 
     #[test]
     fn styled_editor_lines_marks_selected_span() {
-        let rendered = styled_editor_lines("hello", 0, 1, Some((1, 4)));
+        let theme = build_theme(ThemeChoice::Default, false);
+        let rendered = styled_editor_lines("hello", 0, 1, Some((1, 4)), 80, &theme);
         assert_eq!(rendered.len(), 1);
         assert_eq!(rendered[0].spans.len(), 3);
         assert_eq!(rendered[0].spans[0].content.as_ref(), "h");
@@ -3322,6 +4068,13 @@ mod tests {
                 .add_modifier
                 .contains(Modifier::REVERSED)
         );
+    }
+
+    #[test]
+    fn styled_editor_lines_uses_semantic_styles() {
+        let theme = build_theme(ThemeChoice::Default, false);
+        let rendered = styled_editor_lines("# Heading", 0, 1, None, 80, &theme);
+        assert_eq!(rendered[0].spans[0].style.fg, theme.heading.fg);
     }
 
     #[test]

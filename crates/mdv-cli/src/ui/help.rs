@@ -3,8 +3,8 @@ pub fn help_lines() -> &'static [&'static str] {
         "Settings",
         "Home: type path and press Enter to open",
         "Tab inserts spaces in editor mode",
-        "Ctrl+T switches editor/view mode",
-        "Ctrl+/ open/close settings | Esc close settings",
+        "Shift+Tab switches editor/view mode",
+        "Cmd+,/Ctrl+, open/close settings | Esc close settings",
         "Ctrl+Q quit | Ctrl+S save | Ctrl+R reload",
         "Ctrl+F search | F3/F3+Shift next/prev",
         "Ctrl+H replace | Ctrl+G goto",
@@ -26,7 +26,7 @@ mod tests {
     #[test]
     fn help_mentions_new_shortcuts() {
         let text = help_text();
-        assert!(text.contains("Ctrl+/"));
+        assert!(text.contains("Ctrl+,"));
         assert!(!text.contains("Alt+,/Alt+."));
     }
 }
