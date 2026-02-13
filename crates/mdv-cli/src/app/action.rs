@@ -4,8 +4,6 @@ use super::state::{PaneFocus, ThemeChoice};
 pub enum Action {
     ToggleFocus,
     ToggleHelp,
-    AdjustSplit(i16),
-    ResetSplit,
     ApplyPrefs {
         focus: PaneFocus,
         theme: ThemeChoice,

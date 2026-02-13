@@ -1,12 +1,14 @@
 pub fn help_lines() -> &'static [&'static str] {
     &[
+        "Settings",
+        "Tab switch mode (editor/view)",
+        "Ctrl+/ open/close settings | Esc close settings",
         "Ctrl+Q quit | Ctrl+S save | Ctrl+R reload",
         "Ctrl+F search | F3/F3+Shift next/prev",
         "Ctrl+H replace | Ctrl+G goto",
         "Ctrl+J/Ctrl+U hunk nav | Ctrl+E apply hunk",
         "Ctrl+K keep local | Ctrl+M merge",
-        "Tab switch focus | Ctrl+/ help",
-        "Alt+,/Alt+. adjust split | Ctrl+W reset split",
+        "Mouse wheel scrolls active mode viewport",
     ]
 }
 
@@ -21,7 +23,7 @@ mod tests {
     #[test]
     fn help_mentions_new_shortcuts() {
         let text = help_text();
-        assert!(text.contains("Ctrl+/ help"));
-        assert!(text.contains("Alt+,/Alt+."));
+        assert!(text.contains("Ctrl+/"));
+        assert!(!text.contains("Alt+,/Alt+."));
     }
 }

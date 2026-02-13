@@ -232,6 +232,24 @@ fn invalid_focus_flag_is_rejected() {
 }
 
 #[test]
+fn preview_focus_alias_is_accepted() {
+    let path = temp_file("focus-preview-alias", "# x\n");
+    let output = mdv_cmd()
+        .arg("--focus")
+        .arg("preview")
+        .arg(&path)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("run mdv");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn path_mode_force_tui_still_exits_non_interactive() {
     let path = temp_file("force-tui-path", "# title\nx");
     let child = mdv_cmd()
