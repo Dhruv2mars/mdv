@@ -37,3 +37,5 @@ TAG="v$(node -p \"require('./packages/cli/package.json').version\")"
 git tag "$TAG"
 git push origin "$TAG"
 ```
+
+GitHub Release notes are auto-generated from merged PRs/commits when the tag release is created.

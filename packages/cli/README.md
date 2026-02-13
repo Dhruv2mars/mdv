@@ -12,6 +12,14 @@ First run downloads native `mdv` binary.
 Assets are resolved from GitHub Releases for your platform/arch.
 Installer keeps verified cache under `~/.mdv/cache`.
 
+Supported release binaries:
+- `darwin-arm64`
+- `darwin-x64`
+- `linux-arm64`
+- `linux-x64`
+- `win32-arm64`
+- `win32-x64`
+
 ## Usage
 
 ```bash
