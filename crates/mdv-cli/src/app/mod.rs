@@ -2736,8 +2736,8 @@ mod tests {
     fn shift_arrows_and_plain_arrows_collapse_selection() {
         let path = temp_path("selection-collapse");
         fs::write(&path, "abc\ndef\nghi").expect("seed");
-        let mut app = App::new_file(path.clone(), false, false, false, "abc\ndef\nghi".into())
-            .expect("app");
+        let mut app =
+            App::new_file(path.clone(), false, false, false, "abc\ndef\nghi".into()).expect("app");
         let mut running = true;
 
         app.editor.set_cursor(0);
