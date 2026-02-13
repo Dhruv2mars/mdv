@@ -250,6 +250,19 @@ fn preview_focus_alias_is_accepted() {
 }
 
 #[test]
+fn no_args_force_tui_opens_home_and_exits() {
+    let child = mdv_cmd()
+        .env("MDV_FORCE_TUI", "1")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn mdv");
+    let output = wait_with_timeout(child, Duration::from_millis(1200));
+    assert_force_tui_exit_or_known_io_error(output);
+}
+
+#[test]
 fn path_mode_force_tui_still_exits_non_interactive() {
     let path = temp_file("force-tui-path", "# title\nx");
     let child = mdv_cmd()

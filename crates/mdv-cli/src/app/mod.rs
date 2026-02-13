@@ -45,6 +45,7 @@ pub struct App {
     path: Option<PathBuf>,
     readonly: bool,
     watch_enabled: bool,
+    home_mode: bool,
     stream_mode: bool,
     perf_mode: bool,
     editor: EditorBuffer,
@@ -71,6 +72,7 @@ pub struct App {
     replace_with_mode: bool,
     replace_with_query: String,
     replace_target: String,
+    home_query: String,
     selected_conflict_hunk: usize,
     preview_cache: Option<PreviewCache>,
     ui: UiState,
@@ -120,6 +122,7 @@ impl App {
             path: Some(path),
             readonly,
             watch_enabled,
+            home_mode: false,
             stream_mode: false,
             perf_mode,
             editor: EditorBuffer::new(initial_text),
@@ -146,6 +149,7 @@ impl App {
             replace_with_mode: false,
             replace_with_query: String::new(),
             replace_target: String::new(),
+            home_query: String::new(),
             selected_conflict_hunk: 0,
             preview_cache: None,
             ui: UiState::default(),
@@ -169,6 +173,7 @@ impl App {
             path: None,
             readonly: true,
             watch_enabled: false,
+            home_mode: false,
             stream_mode: true,
             perf_mode,
             editor: EditorBuffer::new(String::new()),
@@ -195,6 +200,7 @@ impl App {
             replace_with_mode: false,
             replace_with_query: String::new(),
             replace_target: String::new(),
+            home_query: String::new(),
             selected_conflict_hunk: 0,
             preview_cache: None,
             ui: UiState::default(),
@@ -223,6 +229,7 @@ impl App {
             path: None,
             readonly: true,
             watch_enabled: false,
+            home_mode: false,
             stream_mode: true,
             perf_mode,
             editor: EditorBuffer::new(String::new()),
@@ -249,6 +256,7 @@ impl App {
             replace_with_mode: false,
             replace_with_query: String::new(),
             replace_target: String::new(),
+            home_query: String::new(),
             selected_conflict_hunk: 0,
             preview_cache: None,
             ui: UiState::default(),
@@ -259,6 +267,63 @@ impl App {
             test_preview_cache_hits: 0,
             test_preview_cache_misses: 0,
         }
+    }
+
+    pub fn new_home(readonly: bool, watch_enabled: bool, perf_mode: bool) -> Result<Self> {
+        Ok(Self {
+            path: None,
+            readonly,
+            watch_enabled,
+            home_mode: true,
+            stream_mode: false,
+            perf_mode,
+            editor: EditorBuffer::new(String::new()),
+            status: "Home".into(),
+            _watcher: None,
+            watch_rx: None,
+            stream_rx: None,
+            editor_scroll: 0,
+            preview_scroll: 0,
+            editor_height: 1,
+            preview_height: 1,
+            draw_time_us: 0,
+            watch_event_count: 0,
+            stream_event_count: 0,
+            stream_done: false,
+            interactive_input: io::stdin().is_terminal(),
+            search_mode: false,
+            search_query: String::new(),
+            last_search_query: String::new(),
+            goto_mode: false,
+            goto_query: String::new(),
+            replace_find_mode: false,
+            replace_find_query: String::new(),
+            replace_with_mode: false,
+            replace_with_query: String::new(),
+            replace_target: String::new(),
+            home_query: String::new(),
+            selected_conflict_hunk: 0,
+            preview_cache: None,
+            ui: UiState::default(),
+            term_width: 120,
+            #[cfg(test)]
+            test_next_key: None,
+            #[cfg(test)]
+            test_next_key_result: None,
+            #[cfg(test)]
+            test_draw_error: None,
+            #[cfg(test)]
+            test_preview_cache_hits: 0,
+            #[cfg(test)]
+            test_preview_cache_misses: 0,
+        })
+    }
+
+    #[cfg(test)]
+    fn new_home_for_test(readonly: bool, watch_enabled: bool, perf_mode: bool) -> Self {
+        let mut app = Self::new_home(readonly, watch_enabled, perf_mode).expect("home app");
+        app.interactive_input = false;
+        app
     }
 
     pub fn set_theme(&mut self, theme: ThemeChoice) {
@@ -482,6 +547,35 @@ impl App {
                 (KeyCode::Char('q'), KeyModifiers::CONTROL) => {
                     self.ui.help_open = false;
                     *running = false;
+                }
+                _ => {}
+            }
+            return Ok(());
+        }
+
+        if self.home_mode {
+            match (key.code, key.modifiers) {
+                (KeyCode::Char('q'), KeyModifiers::CONTROL) => {
+                    *running = false;
+                }
+                (KeyCode::Enter, _) => {
+                    if self.home_query.trim().is_empty() {
+                        self.status = "Home: type a path".into();
+                    } else {
+                        self.open_home_path(PathBuf::from(self.home_query.trim()));
+                    }
+                }
+                (KeyCode::Esc, _) => {
+                    self.home_query.clear();
+                    self.status = "Home: query cleared".into();
+                }
+                (KeyCode::Backspace, _) => {
+                    self.home_query.pop();
+                    self.status = format!("Home path: {}", self.home_query);
+                }
+                (KeyCode::Char(c), KeyModifiers::NONE | KeyModifiers::SHIFT) => {
+                    self.home_query.push(c);
+                    self.status = format!("Home path: {}", self.home_query);
                 }
                 _ => {}
             }
@@ -807,6 +901,52 @@ impl App {
         }
     }
 
+    fn open_home_path(&mut self, path: PathBuf) {
+        let existed = path.exists();
+        let text = match fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => String::new(),
+            Err(err) => {
+                self.status = format!("open error: {err}");
+                return;
+            }
+        };
+
+        if self.watch_enabled && existed {
+            match watcher::start(&path) {
+                Ok((watcher, rx)) => {
+                    self._watcher = Some(watcher);
+                    self.watch_rx = Some(rx);
+                }
+                Err(err) => {
+                    self._watcher = None;
+                    self.watch_rx = None;
+                    self.status = format!("watch error: {err}");
+                }
+            }
+        } else {
+            self._watcher = None;
+            self.watch_rx = None;
+        }
+
+        self.path = Some(path.clone());
+        self.editor = EditorBuffer::new(text);
+        self.preview_cache = None;
+        self.home_mode = false;
+        self.search_mode = false;
+        self.goto_mode = false;
+        self.clear_replace_mode();
+        self.home_query.clear();
+        self.editor_scroll = 0;
+        self.preview_scroll = 0;
+        self.sync_conflict_hunk_selection();
+        self.status = if existed {
+            format!("Opened {}", path.display())
+        } else {
+            format!("New file {}", path.display())
+        };
+    }
+
     fn scroll_active_viewport(&mut self, direction: i8) {
         let amount = SCROLL_STEP_LINES;
         if self.ui.focus == PaneFocus::Editor {
@@ -1099,62 +1239,68 @@ impl App {
         let pane_layout = compute_pane_layout(vertical[1], self.ui.focus);
         let compact = pane_layout.kind == LayoutKind::Compact;
 
-        if pane_layout.editor.width > 0 && pane_layout.editor.height > 0 {
-            let editor_height = pane_layout.editor.height.saturating_sub(2) as usize;
-            self.editor_height = editor_height.max(1);
-            let editor_lines = to_lines(self.editor.text());
-            self.editor_scroll =
-                clamp_scroll(self.editor_scroll, editor_lines.len(), self.editor_height);
-            let editor_visible = slice_lines(&editor_lines, self.editor_scroll, self.editor_height);
+        if self.home_mode {
+            self.draw_home(frame, vertical[1], &theme);
+        } else {
+            if pane_layout.editor.width > 0 && pane_layout.editor.height > 0 {
+                let editor_height = pane_layout.editor.height.saturating_sub(2) as usize;
+                self.editor_height = editor_height.max(1);
+                let editor_lines = to_lines(self.editor.text());
+                self.editor_scroll =
+                    clamp_scroll(self.editor_scroll, editor_lines.len(), self.editor_height);
+                let editor_visible =
+                    slice_lines(&editor_lines, self.editor_scroll, self.editor_height);
 
-            let editor_border = pane_border_style(&theme, self.ui.focus == PaneFocus::Editor);
-            let editor = Paragraph::new(editor_visible).block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title("Editor")
-                    .border_style(editor_border),
-            );
-            frame.render_widget(editor, pane_layout.editor);
-        }
-
-        if pane_layout.preview.width > 0 && pane_layout.preview.height > 0 {
-            let preview_height = pane_layout.preview.height.saturating_sub(2) as usize;
-            self.preview_height = preview_height.max(1);
-            let preview_width = pane_layout.preview.width.saturating_sub(2);
-            let (preview_lines, selected_anchor) = self.preview_lines_cached(preview_width);
-
-            if let Some(anchor) = selected_anchor {
-                if anchor < self.preview_scroll {
-                    self.preview_scroll = anchor;
-                } else if anchor >= self.preview_scroll + preview_height.max(1) {
-                    self.preview_scroll = anchor.saturating_sub(preview_height / 2);
-                }
-            }
-            self.preview_scroll = clamp_scroll(
-                self.preview_scroll,
-                preview_lines.len(),
-                self.preview_height,
-            );
-
-            let mut in_code = code_open_before(preview_lines.as_ref(), self.preview_scroll);
-            let preview_visible = preview_lines
-                .iter()
-                .skip(self.preview_scroll)
-                .take(self.preview_height)
-                .map(|line| styled_preview_line(line, preview_width, &theme, &mut in_code))
-                .collect::<Vec<_>>();
-
-            let preview_title = preview_title(self.selected_conflict_hunk, self.editor.conflict());
-            let preview_border = pane_border_style(&theme, self.ui.focus == PaneFocus::Preview);
-            let preview = Paragraph::new(preview_visible)
-                .block(
+                let editor_border = pane_border_style(&theme, self.ui.focus == PaneFocus::Editor);
+                let editor = Paragraph::new(editor_visible).block(
                     Block::default()
                         .borders(Borders::ALL)
-                        .title(preview_title)
-                        .border_style(preview_border),
-                )
-                .wrap(Wrap { trim: false });
-            frame.render_widget(preview, pane_layout.preview);
+                        .title("Editor")
+                        .border_style(editor_border),
+                );
+                frame.render_widget(editor, pane_layout.editor);
+            }
+
+            if pane_layout.preview.width > 0 && pane_layout.preview.height > 0 {
+                let preview_height = pane_layout.preview.height.saturating_sub(2) as usize;
+                self.preview_height = preview_height.max(1);
+                let preview_width = pane_layout.preview.width.saturating_sub(2);
+                let (preview_lines, selected_anchor) = self.preview_lines_cached(preview_width);
+
+                if let Some(anchor) = selected_anchor {
+                    if anchor < self.preview_scroll {
+                        self.preview_scroll = anchor;
+                    } else if anchor >= self.preview_scroll + preview_height.max(1) {
+                        self.preview_scroll = anchor.saturating_sub(preview_height / 2);
+                    }
+                }
+                self.preview_scroll = clamp_scroll(
+                    self.preview_scroll,
+                    preview_lines.len(),
+                    self.preview_height,
+                );
+
+                let mut in_code = code_open_before(preview_lines.as_ref(), self.preview_scroll);
+                let preview_visible = preview_lines
+                    .iter()
+                    .skip(self.preview_scroll)
+                    .take(self.preview_height)
+                    .map(|line| styled_preview_line(line, preview_width, &theme, &mut in_code))
+                    .collect::<Vec<_>>();
+
+                let preview_title =
+                    preview_title(self.selected_conflict_hunk, self.editor.conflict());
+                let preview_border = pane_border_style(&theme, self.ui.focus == PaneFocus::Preview);
+                let preview = Paragraph::new(preview_visible)
+                    .block(
+                        Block::default()
+                            .borders(Borders::ALL)
+                            .title(preview_title)
+                            .border_style(preview_border),
+                    )
+                    .wrap(Wrap { trim: false });
+                frame.render_widget(preview, pane_layout.preview);
+            }
         }
 
         let mut base_status = status_line(
@@ -1190,20 +1336,55 @@ impl App {
             frame.render_widget(help_widget, popup);
         }
 
-        if !self.readonly
-            && !self.ui.help_open
-            && self.ui.focus == PaneFocus::Editor
-            && pane_layout.editor.width > 0
-        {
-            let cursor = cursor_rect(pane_layout.editor);
-            let (line, col) = self.editor.line_col_at_cursor();
-            let visible_line = line.saturating_sub(self.editor_scroll) as u16;
-            if visible_line < cursor.height {
-                let x = (cursor.x + col as u16).min(cursor.x + cursor.width.saturating_sub(1));
-                let y = cursor.y + visible_line;
-                frame.set_cursor_position((x, y));
+        if !self.ui.help_open {
+            if self.home_mode {
+                let popup = centered_popup(72, 12, vertical[1]);
+                if popup.width > 10 && popup.height > 7 {
+                    let x = popup
+                        .x
+                        .saturating_add(1)
+                        .saturating_add(6)
+                        .saturating_add(self.home_query.chars().count() as u16)
+                        .min(popup.x + popup.width.saturating_sub(2));
+                    let y = popup.y + 5;
+                    frame.set_cursor_position((x, y));
+                }
+            } else if !self.readonly
+                && self.ui.focus == PaneFocus::Editor
+                && pane_layout.editor.width > 0
+            {
+                let cursor = cursor_rect(pane_layout.editor);
+                let (line, col) = self.editor.line_col_at_cursor();
+                let visible_line = line.saturating_sub(self.editor_scroll) as u16;
+                if visible_line < cursor.height {
+                    let x = (cursor.x + col as u16).min(cursor.x + cursor.width.saturating_sub(1));
+                    let y = cursor.y + visible_line;
+                    frame.set_cursor_position((x, y));
+                }
             }
         }
+    }
+
+    fn draw_home(&mut self, frame: &mut Frame<'_>, area: Rect, theme: &ThemeTokens) {
+        let popup = centered_popup(72, 12, area);
+        frame.render_widget(Clear, popup);
+        let lines = vec![
+            Line::from(Span::styled("mdv", theme.heading)),
+            Line::from("Terminal-first markdown visualizer/editor"),
+            Line::from(""),
+            Line::from(Span::styled("Open Markdown File", theme.heading)),
+            Line::from(format!("Path: {}", self.home_query)),
+            Line::from(""),
+            Line::from("Enter open | Ctrl+/ settings | Ctrl+Q quit"),
+            Line::from("Tip: Use --focus view to start in preview mode"),
+        ];
+        let home = Paragraph::new(lines).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("Home")
+                .border_style(theme.pane_focus),
+        );
+        frame.render_widget(home, popup);
     }
 
     fn info_line(&self, width: usize) -> String {
@@ -1211,7 +1392,13 @@ impl App {
             .path
             .as_ref()
             .map(|p| p.display().to_string())
-            .unwrap_or_else(|| "<stream>".into());
+            .unwrap_or_else(|| {
+                if self.home_mode {
+                    "<home>".into()
+                } else {
+                    "<stream>".into()
+                }
+            });
         let mode = mode_label(self);
         let ro = if self.readonly { "RO" } else { "RW" };
         let dirty = if self.editor.dirty { "dirty" } else { "clean" };
@@ -1239,6 +1426,8 @@ impl App {
             "search: Enter apply"
         } else if self.goto_mode {
             "goto: Enter apply"
+        } else if self.home_mode {
+            "home: type path + Enter"
         } else if self.ui.help_open {
             "Esc close settings"
         } else {
@@ -1275,7 +1464,9 @@ fn status_line(
 }
 
 fn mode_label(app: &App) -> &'static str {
-    if app.replace_find_mode || app.replace_with_mode {
+    if app.home_mode {
+        "home"
+    } else if app.replace_find_mode || app.replace_with_mode {
         "replace"
     } else if app.search_mode {
         "search"
@@ -2588,6 +2779,47 @@ mod tests {
         assert_eq!(app.ui.theme, ThemeChoice::HighContrast);
         assert!(app.ui.no_color);
         assert_eq!(app.ui.focus, PaneFocus::Preview);
+    }
+
+    #[test]
+    fn new_home_builds_home_mode_app() {
+        let app = App::new_home_for_test(false, false, false);
+        assert!(app.home_mode);
+        assert_eq!(app.path, None);
+        assert_eq!(mode_label(&app), "home");
+    }
+
+    #[test]
+    fn home_query_open_enters_editor_mode() {
+        let path = temp_path("home-open");
+        fs::write(&path, "# h\nx\n").expect("seed");
+        let mut app = App::new_home_for_test(false, false, false);
+        let mut running = true;
+
+        for c in path.display().to_string().chars() {
+            app.handle_key(key(KeyCode::Char(c), KeyModifiers::NONE), &mut running)
+                .expect("type path");
+        }
+        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE), &mut running)
+            .expect("open");
+
+        assert!(!app.home_mode);
+        assert!(app.path.is_some());
+        assert!(app.editor.text().contains("# h"));
+
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn draw_home_renders_branding_and_search_prompt() {
+        let mut app = App::new_home_for_test(false, false, false);
+        app.home_query = "/tmp/x.md".into();
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+        terminal.draw(|frame| app.draw(frame)).expect("draw");
+        let rendered = terminal.backend().buffer().content();
+        assert!(rendered.iter().any(|cell| cell.symbol() == "m"));
+        assert!(rendered.iter().any(|cell| cell.symbol() == "P"));
     }
 
     #[test]

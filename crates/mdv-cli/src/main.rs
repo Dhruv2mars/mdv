@@ -82,10 +82,16 @@ fn main() -> Result<()> {
     }
 
     let Some(path) = cli.path else {
-        let mut cmd = Cli::command();
-        cmd.print_help()?;
-        println!();
-        return Ok(());
+        if (!io::stdin().is_terminal() || !io::stdout().is_terminal()) && !force_tui {
+            let mut cmd = Cli::command();
+            cmd.print_help()?;
+            println!();
+            return Ok(());
+        }
+
+        let mut app = app::App::new_home(cli.readonly, !cli.no_watch, cli.perf)?;
+        apply_ui_flags(&mut app, cli.theme, cli.no_color, cli.focus);
+        return app.run();
     };
 
     let text = read_initial_text(&path)?;
