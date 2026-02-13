@@ -8,9 +8,11 @@ import { binNameForPlatform } from '../bin/mdv-lib.js';
 test('platform matrix naming stays valid for all shipped targets', () => {
   const cases = [
     { platform: 'linux', arch: 'x64', bin: 'mdv', asset: 'mdv-linux-x64' },
+    { platform: 'linux', arch: 'arm64', bin: 'mdv', asset: 'mdv-linux-arm64' },
     { platform: 'darwin', arch: 'arm64', bin: 'mdv', asset: 'mdv-darwin-arm64' },
     { platform: 'darwin', arch: 'x64', bin: 'mdv', asset: 'mdv-darwin-x64' },
-    { platform: 'win32', arch: 'x64', bin: 'mdv.exe', asset: 'mdv-win32-x64.exe' }
+    { platform: 'win32', arch: 'x64', bin: 'mdv.exe', asset: 'mdv-win32-x64.exe' },
+    { platform: 'win32', arch: 'arm64', bin: 'mdv.exe', asset: 'mdv-win32-arm64.exe' }
   ];
 
   for (const item of cases) {
@@ -22,4 +24,3 @@ test('platform matrix naming stays valid for all shipped targets', () => {
     );
   }
 });
-

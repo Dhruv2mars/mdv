@@ -26,14 +26,18 @@ const packageRoot = join(scriptDir, '..');
 
 test('assetNameFor maps platform+arch', () => {
   assert.equal(assetNameFor('linux', 'x64'), 'mdv-linux-x64');
+  assert.equal(assetNameFor('linux', 'arm64'), 'mdv-linux-arm64');
   assert.equal(assetNameFor('darwin', 'arm64'), 'mdv-darwin-arm64');
   assert.equal(assetNameFor('win32', 'x64'), 'mdv-win32-x64.exe');
+  assert.equal(assetNameFor('win32', 'arm64'), 'mdv-win32-arm64.exe');
 });
 
 test('checksumsAssetNameFor maps platform+arch', () => {
   assert.equal(checksumsAssetNameFor('linux', 'x64'), 'checksums-linux-x64.txt');
+  assert.equal(checksumsAssetNameFor('linux', 'arm64'), 'checksums-linux-arm64.txt');
   assert.equal(checksumsAssetNameFor('darwin', 'arm64'), 'checksums-darwin-arm64.txt');
   assert.equal(checksumsAssetNameFor('win32', 'x64'), 'checksums-win32-x64.txt');
+  assert.equal(checksumsAssetNameFor('win32', 'arm64'), 'checksums-win32-arm64.txt');
 });
 
 test('checksumsAssetNameFromBinaryAsset maps known binary names', () => {

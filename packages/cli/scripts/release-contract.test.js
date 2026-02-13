@@ -32,7 +32,9 @@ test('release workflow declares expected installer asset matrix', () => {
 
   const expected = new Set([
     'mdv-linux-x64',
+    'mdv-linux-arm64',
     'mdv-win32-x64.exe',
+    'mdv-win32-arm64.exe',
     'mdv-darwin-arm64',
     'mdv-darwin-x64'
   ]);
@@ -65,4 +67,5 @@ test('release workflow keeps tag and version validation contract', () => {
   const text = readFileSync(releaseWorkflow, 'utf8');
   assert.match(text, /tags:\s*\n\s*-\s*'v\*'/);
   assert.match(text, /Validate tag matches package version/);
+  assert.match(text, /gh release create\s+"\$\{RELEASE_TAG\}"\s+--title\s+"\$\{RELEASE_TAG\}"\s+--generate-notes/);
 });
