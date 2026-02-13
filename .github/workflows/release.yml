@@ -52,7 +52,7 @@ jobs:
           GH_REPO: Dhruv2mars/mdv
         run: |
           set -euo pipefail
-          gh release view "${RELEASE_TAG}" >/dev/null 2>&1 || gh release create "${RELEASE_TAG}" --title "${RELEASE_TAG}" --notes ""
+          gh release view "${RELEASE_TAG}" >/dev/null 2>&1 || gh release create "${RELEASE_TAG}" --title "${RELEASE_TAG}" --generate-notes
 
   build_upload:
     needs: create_release
@@ -65,11 +65,21 @@ jobs:
             arch: x64
             ext: ''
             target: ''
+          - os: ubuntu-latest
+            platform: linux
+            arch: arm64
+            ext: ''
+            target: aarch64-unknown-linux-gnu
           - os: windows-latest
             platform: win32
             arch: x64
             ext: '.exe'
             target: ''
+          - os: windows-latest
+            platform: win32
+            arch: arm64
+            ext: '.exe'
+            target: aarch64-pc-windows-msvc
           - os: macos-14
             platform: darwin
             arch: arm64
@@ -90,10 +100,21 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
 
+      - name: Setup Linux arm64 cross linker
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+
       - name: Build
         shell: bash
         run: |
           set -euo pipefail
+          if [ "${{ matrix.target }}" = "aarch64-unknown-linux-gnu" ]; then
+            export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
+          fi
           if [ -n "${{ matrix.target }}" ]; then
             rustup target add "${{ matrix.target }}"
             cargo build --release -p mdv-cli --target "${{ matrix.target }}"
