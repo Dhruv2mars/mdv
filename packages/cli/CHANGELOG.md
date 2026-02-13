@@ -1,5 +1,11 @@
 # @dhruv2mars/mdv
 
+## 0.0.19
+
+### Patch Changes
+
+- 15c107c: Overhaul TUI UX on ratatui: responsive pane layout, focus/help/split shortcuts, top info bar, richer status hints, and new theme/focus CLI flags.
+
 ## 0.0.18
 
 ### Patch Changes
