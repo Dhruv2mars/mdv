@@ -41,11 +41,15 @@ tail -f notes.md | mdv --stream
 
 ## Keybinds
 
+In-app docs: `Cmd+,/Ctrl+,` (Docs + Settings modal).
+
+Quick ref:
 - `Ctrl+Q` quit
 - `Ctrl+S` save
 - `Ctrl+R` reload
-- `Ctrl+K` keep local on conflict
-- `Ctrl+M` merge markers on conflict
+- `Shift+Tab` (or `Ctrl+T`) switch editor/view mode
+- `Ctrl+F` search, `Ctrl+H` replace, `Ctrl+G` goto
+- Conflict flow: `Ctrl+J`/`Ctrl+U` hunk nav, `Ctrl+E` apply, `Ctrl+K` keep local, `Ctrl+M` merge
 
 ## Flags
 
