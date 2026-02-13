@@ -1,3 +1,8 @@
+pub mod action;
+pub mod input;
+pub mod state;
+pub mod update;
+
 use std::fs;
 use std::hash::{Hash, Hasher};
 use std::io::{self, IsTerminal};
@@ -11,17 +16,25 @@ use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
-use mdv_core::{EditorBuffer, render_preview_lines};
+use mdv_core::{EditorBuffer, SegmentKind, render_preview_lines, render_preview_segments};
 use ratatui::backend::{Backend, CrosstermBackend};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Color, Style};
-use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::style::Style;
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use ratatui::{Frame, Terminal};
 
 #[cfg(not(test))]
 use crate::stream;
 use crate::stream::StreamMessage;
+use crate::ui::help;
+use crate::ui::layout::{LayoutKind, compute_pane_layout};
+use crate::ui::render::{compose_status, truncate_middle};
+use crate::ui::theme::{ThemeTokens, build_theme, style_for_segment};
 use crate::watcher::{self, WatchMessage};
+use action::Action;
+pub use state::{PaneFocus, ThemeChoice};
+use state::{UiState, default_split_ratio};
 
 pub struct App {
     path: Option<PathBuf>,
@@ -54,6 +67,8 @@ pub struct App {
     replace_target: String,
     selected_conflict_hunk: usize,
     preview_cache: Option<PreviewCache>,
+    ui: UiState,
+    term_width: u16,
     #[cfg(test)]
     test_next_key: Option<KeyEvent>,
     #[cfg(test)]
@@ -119,6 +134,11 @@ impl App {
             replace_target: String::new(),
             selected_conflict_hunk: 0,
             preview_cache: None,
+            ui: UiState {
+                split_ratio: default_split_ratio(120),
+                ..UiState::default()
+            },
+            term_width: 120,
             #[cfg(test)]
             test_next_key: None,
             #[cfg(test)]
@@ -165,6 +185,11 @@ impl App {
             replace_target: String::new(),
             selected_conflict_hunk: 0,
             preview_cache: None,
+            ui: UiState {
+                split_ratio: default_split_ratio(120),
+                ..UiState::default()
+            },
+            term_width: 120,
             #[cfg(test)]
             test_next_key: None,
             #[cfg(test)]
@@ -216,12 +241,59 @@ impl App {
             replace_target: String::new(),
             selected_conflict_hunk: 0,
             preview_cache: None,
+            ui: UiState {
+                split_ratio: default_split_ratio(120),
+                ..UiState::default()
+            },
+            term_width: 120,
             test_next_key: None,
             test_next_key_result: None,
             test_draw_error: None,
             test_preview_cache_hits: 0,
             test_preview_cache_misses: 0,
         }
+    }
+
+    pub fn set_theme(&mut self, theme: ThemeChoice) {
+        let focus = self.ui.focus;
+        let no_color = self.ui.no_color;
+        update::apply_action(
+            &mut self.ui,
+            Action::ApplyPrefs {
+                focus,
+                theme,
+                no_color,
+            },
+            self.term_width,
+        );
+    }
+
+    pub fn set_no_color(&mut self, no_color: bool) {
+        let focus = self.ui.focus;
+        let theme = self.ui.theme;
+        update::apply_action(
+            &mut self.ui,
+            Action::ApplyPrefs {
+                focus,
+                theme,
+                no_color,
+            },
+            self.term_width,
+        );
+    }
+
+    pub fn set_initial_focus(&mut self, focus: PaneFocus) {
+        let theme = self.ui.theme;
+        let no_color = self.ui.no_color;
+        update::apply_action(
+            &mut self.ui,
+            Action::ApplyPrefs {
+                focus,
+                theme,
+                no_color,
+            },
+            self.term_width,
+        );
     }
 
     pub fn run(&mut self) -> Result<()> {
@@ -360,6 +432,33 @@ impl App {
     }
 
     fn handle_key(&mut self, key: KeyEvent, running: &mut bool) -> Result<()> {
+        if let Some(action) = input::map_global_key(key) {
+            update::apply_action(&mut self.ui, action, self.term_width);
+            match action {
+                Action::ToggleFocus => {
+                    self.status = match self.ui.focus {
+                        PaneFocus::Editor => "Focus: editor".into(),
+                        PaneFocus::Preview => "Focus: preview".into(),
+                    };
+                }
+                Action::ToggleHelp => {
+                    self.status = if self.ui.help_open {
+                        "Help opened".into()
+                    } else {
+                        "Help closed".into()
+                    };
+                }
+                Action::AdjustSplit(delta) => {
+                    self.status = format!("Split {delta:+}% => {}%", self.ui.split_ratio);
+                }
+                Action::ResetSplit => {
+                    self.status = format!("Split reset => {}%", self.ui.split_ratio);
+                }
+                Action::ApplyPrefs { .. } => {}
+            }
+            return Ok(());
+        }
+
         if self.replace_find_mode {
             match (key.code, key.modifiers) {
                 (KeyCode::Char('q'), KeyModifiers::CONTROL) => {
@@ -915,75 +1014,120 @@ impl App {
 
     fn draw(&mut self, frame: &mut Frame<'_>) {
         let area = frame.area();
+        self.term_width = area.width.max(1);
+        let theme = build_theme(self.ui.theme, self.ui.no_color);
 
         let vertical = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Min(1), Constraint::Length(1)])
+            .constraints([
+                Constraint::Length(1),
+                Constraint::Min(1),
+                Constraint::Length(1),
+            ])
             .split(area);
 
-        let panes = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-            .split(vertical[0]);
+        let info = self.info_line(vertical[0].width as usize);
+        frame.render_widget(Paragraph::new(info).style(theme.top_bar), vertical[0]);
 
-        let editor_height = panes[0].height.saturating_sub(2) as usize;
-        self.editor_height = editor_height.max(1);
+        let pane_layout = compute_pane_layout(vertical[1], self.ui.focus, self.ui.split_ratio);
+        let compact = pane_layout.kind == LayoutKind::Compact;
 
-        let editor_lines = to_lines(self.editor.text());
-        self.editor_scroll =
-            clamp_scroll(self.editor_scroll, editor_lines.len(), self.editor_height);
-        let editor_visible = slice_lines(&editor_lines, self.editor_scroll, self.editor_height);
+        if pane_layout.editor.width > 0 && pane_layout.editor.height > 0 {
+            let editor_height = pane_layout.editor.height.saturating_sub(2) as usize;
+            self.editor_height = editor_height.max(1);
+            let editor_lines = to_lines(self.editor.text());
+            self.editor_scroll =
+                clamp_scroll(self.editor_scroll, editor_lines.len(), self.editor_height);
+            let editor_visible = slice_lines(&editor_lines, self.editor_scroll, self.editor_height);
 
-        let editor = Paragraph::new(editor_visible)
-            .block(Block::default().borders(Borders::ALL).title("Editor"));
-        frame.render_widget(editor, panes[0]);
-
-        let preview_height = panes[1].height.saturating_sub(2) as usize;
-        let preview_width = panes[1].width.saturating_sub(2);
-        let (preview_lines, selected_anchor) = self.preview_lines_cached(preview_width);
-
-        if let Some(anchor) = selected_anchor {
-            if anchor < self.preview_scroll {
-                self.preview_scroll = anchor;
-            } else if anchor >= self.preview_scroll + preview_height.max(1) {
-                self.preview_scroll = anchor.saturating_sub(preview_height / 2);
-            }
+            let editor_border = pane_border_style(&theme, self.ui.focus == PaneFocus::Editor);
+            let editor = Paragraph::new(editor_visible).block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title("Editor")
+                    .border_style(editor_border),
+            );
+            frame.render_widget(editor, pane_layout.editor);
         }
 
-        self.preview_scroll = clamp_scroll(
-            self.preview_scroll,
-            preview_lines.len(),
-            preview_height.max(1),
-        );
+        if pane_layout.preview.width > 0 && pane_layout.preview.height > 0 {
+            let preview_height = pane_layout.preview.height.saturating_sub(2) as usize;
+            let preview_width = pane_layout.preview.width.saturating_sub(2);
+            let (preview_lines, selected_anchor) = self.preview_lines_cached(preview_width);
 
-        let preview_visible = slice_lines(
-            preview_lines.as_ref(),
-            self.preview_scroll,
-            preview_height.max(1),
-        );
+            if let Some(anchor) = selected_anchor {
+                if anchor < self.preview_scroll {
+                    self.preview_scroll = anchor;
+                } else if anchor >= self.preview_scroll + preview_height.max(1) {
+                    self.preview_scroll = anchor.saturating_sub(preview_height / 2);
+                }
+            }
+            self.preview_scroll = clamp_scroll(
+                self.preview_scroll,
+                preview_lines.len(),
+                preview_height.max(1),
+            );
 
-        let preview = Paragraph::new(preview_visible)
-            .block(Block::default().borders(Borders::ALL).title("Preview"));
-        frame.render_widget(preview, panes[1]);
+            let mut in_code = code_open_before(preview_lines.as_ref(), self.preview_scroll);
+            let preview_visible = preview_lines
+                .iter()
+                .skip(self.preview_scroll)
+                .take(preview_height.max(1))
+                .map(|line| styled_preview_line(line, preview_width, &theme, &mut in_code))
+                .collect::<Vec<_>>();
 
-        let status_style = if self.editor.is_conflicted() {
-            Style::default().fg(Color::Yellow)
-        } else {
-            Style::default().fg(Color::Green)
-        };
+            let preview_title = preview_title(self.selected_conflict_hunk, self.editor.conflict());
+            let preview_border = pane_border_style(&theme, self.ui.focus == PaneFocus::Preview);
+            let preview = Paragraph::new(preview_visible)
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .title(preview_title)
+                        .border_style(preview_border),
+                )
+                .wrap(Wrap { trim: false });
+            frame.render_widget(preview, pane_layout.preview);
+        }
 
-        let status = Paragraph::new(status_line(
+        let mut base_status = status_line(
             &self.status,
             self.perf_mode,
             self.draw_time_us,
             self.watch_event_count,
             self.stream_event_count,
-        ))
-        .style(status_style);
-        frame.render_widget(status, vertical[1]);
+        );
+        if compact {
+            base_status = format!("compact terminal (<80x24) | {base_status}");
+        }
+        let right_hint = self.status_hint();
+        let status_text = compose_status(&base_status, &right_hint, vertical[2].width as usize);
+        frame.render_widget(
+            Paragraph::new(status_text).style(status_style(
+                &theme,
+                self.editor.is_conflicted(),
+                &self.status,
+            )),
+            vertical[2],
+        );
 
-        if !self.readonly {
-            let cursor = cursor_rect(panes[0]);
+        if self.ui.help_open {
+            let popup = centered_popup(76, 9, area);
+            frame.render_widget(Clear, popup);
+            let help_widget = Paragraph::new(help::help_text()).style(theme.help).block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title("Help")
+                    .border_style(theme.pane_focus),
+            );
+            frame.render_widget(help_widget, popup);
+        }
+
+        if !self.readonly
+            && !self.ui.help_open
+            && self.ui.focus == PaneFocus::Editor
+            && pane_layout.editor.width > 0
+        {
+            let cursor = cursor_rect(pane_layout.editor);
             let (line, col) = self.editor.line_col_at_cursor();
             let visible_line = line.saturating_sub(self.editor_scroll) as u16;
             if visible_line < cursor.height {
@@ -992,6 +1136,57 @@ impl App {
                 frame.set_cursor_position((x, y));
             }
         }
+    }
+
+    fn info_line(&self, width: usize) -> String {
+        let path = self
+            .path
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "<stream>".into());
+        let mode = mode_label(self);
+        let ro = if self.readonly { "RO" } else { "RW" };
+        let dirty = if self.editor.dirty { "dirty" } else { "clean" };
+        let focus = match self.ui.focus {
+            PaneFocus::Editor => "editor",
+            PaneFocus::Preview => "preview",
+        };
+        let line = format!(
+            "{} | {ro} | {dirty} | mode={mode} | focus={focus}",
+            truncate_middle(&path, width.saturating_sub(32).max(12))
+        );
+        if line.chars().count() > width {
+            truncate_middle(&line, width).into_owned()
+        } else {
+            line
+        }
+    }
+
+    fn status_hint(&self) -> String {
+        let base = if self.replace_find_mode {
+            "replace: enter find"
+        } else if self.replace_with_mode {
+            "replace: enter with | Ctrl+A all"
+        } else if self.search_mode {
+            "search: Enter apply"
+        } else if self.goto_mode {
+            "goto: Enter apply"
+        } else if self.ui.help_open {
+            "Ctrl+/ close help"
+        } else {
+            "Tab focus | Ctrl+/ help"
+        };
+
+        if let Some(conflict) = self.editor.conflict() {
+            if !conflict.hunks.is_empty() {
+                return format!(
+                    "{base} | hunk {}/{}",
+                    self.selected_conflict_hunk + 1,
+                    conflict.hunks.len()
+                );
+            }
+        }
+        base.into()
     }
 }
 
@@ -1009,6 +1204,140 @@ fn status_line(
     format!(
         "{base} | perf draw={draw_time_us}us watch_events={watch_events} stream_events={stream_events}"
     )
+}
+
+fn mode_label(app: &App) -> &'static str {
+    if app.replace_find_mode || app.replace_with_mode {
+        "replace"
+    } else if app.search_mode {
+        "search"
+    } else if app.goto_mode {
+        "goto"
+    } else if app.stream_mode {
+        "stream"
+    } else if app.editor.is_conflicted() {
+        "conflict"
+    } else {
+        "normal"
+    }
+}
+
+fn pane_border_style(theme: &ThemeTokens, focused: bool) -> Style {
+    if focused {
+        theme.pane_focus
+    } else {
+        theme.pane_border
+    }
+}
+
+fn status_style(theme: &ThemeTokens, conflicted: bool, status: &str) -> Style {
+    if status.contains("error") || status.contains("Error") {
+        return theme.status_error;
+    }
+    if conflicted || status.contains("conflict") {
+        return theme.status_warn;
+    }
+    theme.status_ok
+}
+
+fn preview_title(
+    selected_conflict_hunk: usize,
+    conflict: Option<&mdv_core::ConflictState>,
+) -> String {
+    if let Some(conflict) = conflict
+        && !conflict.hunks.is_empty()
+    {
+        return format!(
+            "Preview [conflict {}/{}]",
+            selected_conflict_hunk + 1,
+            conflict.hunks.len()
+        );
+    }
+    "Preview".into()
+}
+
+fn styled_preview_line(
+    line: &str,
+    width: u16,
+    theme: &ThemeTokens,
+    in_code_block: &mut bool,
+) -> Line<'static> {
+    if line.trim_start().starts_with("```") || line.trim() == "$$" {
+        *in_code_block = !*in_code_block;
+        return Line::from(Span::styled(
+            line.to_string(),
+            style_for_segment(theme, SegmentKind::Code),
+        ));
+    }
+    if *in_code_block {
+        return Line::from(Span::styled(
+            line.to_string(),
+            style_for_segment(theme, SegmentKind::Code),
+        ));
+    }
+
+    let kind = if line.contains("Local block") {
+        SegmentKind::ConflictLocal
+    } else if line.contains("External block") {
+        SegmentKind::ConflictExternal
+    } else {
+        render_preview_segments(line, width)
+            .first()
+            .and_then(|l| l.segments.first())
+            .map(|s| s.kind)
+            .unwrap_or(SegmentKind::Plain)
+    };
+
+    if kind == SegmentKind::ListBullet {
+        let (bullet, rest) = if let Some(stripped) = line.strip_prefix("- ") {
+            ("- ".to_string(), stripped.to_string())
+        } else {
+            match line.split_once(". ") {
+                Some((lhs, rhs)) if lhs.chars().all(|c| c.is_ascii_digit()) => {
+                    (format!("{lhs}. "), rhs.to_string())
+                }
+                _ => (line.to_string(), String::new()),
+            }
+        };
+        let mut spans = Vec::new();
+        spans.push(Span::styled(
+            bullet,
+            style_for_segment(theme, SegmentKind::ListBullet),
+        ));
+        if !rest.is_empty() {
+            spans.push(Span::styled(
+                rest,
+                style_for_segment(theme, SegmentKind::Plain),
+            ));
+        }
+        return Line::from(spans);
+    }
+
+    Line::from(Span::styled(
+        line.to_string(),
+        style_for_segment(theme, kind),
+    ))
+}
+
+fn code_open_before(lines: &[String], scroll: usize) -> bool {
+    let mut open = false;
+    for line in lines.iter().take(scroll) {
+        if line.trim_start().starts_with("```") || line.trim() == "$$" {
+            open = !open;
+        }
+    }
+    open
+}
+
+fn centered_popup(width_percent: u16, height: u16, area: Rect) -> Rect {
+    let popup_width = area.width.saturating_mul(width_percent) / 100;
+    let popup_height = height.min(area.height);
+    Rect {
+        x: area.x + (area.width.saturating_sub(popup_width)) / 2,
+        y: area.y + (area.height.saturating_sub(popup_height)) / 2,
+        width: popup_width.max(10),
+        height: popup_height.max(3),
+    }
 }
 
 fn to_lines(text: &str) -> Vec<String> {
@@ -1648,7 +1977,7 @@ mod tests {
         app.editor_scroll = 0;
         app.preview_scroll = 0;
 
-        let backend = TestBackend::new(80, 20);
+        let backend = TestBackend::new(120, 30);
         let mut terminal = Terminal::new(backend).expect("terminal");
         terminal.draw(|frame| app.draw(frame)).expect("draw");
 
@@ -1667,7 +1996,7 @@ mod tests {
         app.editor.dirty = true;
         app.editor.on_external_change("same".into());
 
-        let backend = TestBackend::new(80, 20);
+        let backend = TestBackend::new(120, 30);
         let mut terminal = Terminal::new(backend).expect("terminal");
         terminal.draw(|frame| app.draw(frame)).expect("draw");
 
@@ -1680,7 +2009,7 @@ mod tests {
         fs::write(&path, "x").expect("seed");
         let mut app = App::new_file(path.clone(), false, false, false, "x".into()).expect("app");
         app.interactive_input = false;
-        let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
+        let mut terminal = Terminal::new(TestBackend::new(120, 30)).expect("terminal");
         app.run_loop(&mut terminal).expect("run_loop");
         let _ = app.run();
 
@@ -1768,7 +2097,7 @@ mod tests {
         let mut app = App::new_stream_for_test(false);
         app.interactive_input = false;
         app.stream_done = true;
-        let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
+        let mut terminal = Terminal::new(TestBackend::new(120, 30)).expect("terminal");
         app.run_loop(&mut terminal).expect("run loop stream done");
     }
 
@@ -1779,7 +2108,7 @@ mod tests {
         let mut app = App::new_file(path.clone(), false, false, false, "x".into()).expect("app");
         app.interactive_input = true;
         app.test_next_key = Some(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL));
-        let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
+        let mut terminal = Terminal::new(TestBackend::new(120, 30)).expect("terminal");
         app.run_loop(&mut terminal).expect("run loop");
         let _ = fs::remove_file(&path);
     }
@@ -1792,7 +2121,7 @@ mod tests {
         app.interactive_input = false;
         app.test_draw_error = Some(io::Error::other("draw failed"));
 
-        let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
+        let mut terminal = Terminal::new(TestBackend::new(120, 30)).expect("terminal");
         let err = app.run_loop(&mut terminal).expect_err("draw error");
         assert!(err.to_string().contains("draw failed"));
 
@@ -1807,7 +2136,7 @@ mod tests {
         app.interactive_input = true;
         app.test_next_key_result = Some(Err(io::Error::other("poll failed")));
 
-        let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
+        let mut terminal = Terminal::new(TestBackend::new(120, 30)).expect("terminal");
         let err = app.run_loop(&mut terminal).expect_err("next key error");
         assert!(err.to_string().contains("poll failed"));
 
@@ -2013,7 +2342,7 @@ mod tests {
         let path = temp_path("preview-cache");
         fs::write(&path, "one").expect("seed");
         let mut app = App::new_file(path.clone(), false, false, false, "one".into()).expect("app");
-        let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
+        let mut terminal = Terminal::new(TestBackend::new(120, 30)).expect("terminal");
 
         terminal.draw(|frame| app.draw(frame)).expect("first draw");
         assert_eq!(app.test_preview_cache_misses, 1);
