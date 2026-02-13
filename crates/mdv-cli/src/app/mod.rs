@@ -1042,9 +1042,7 @@ impl App {
                 self.editor.move_down();
                 self.update_selection_after_move();
             }
-            (KeyCode::Left, mods)
-                if mods == KeyModifiers::ALT || mods == KeyModifiers::CONTROL =>
-            {
+            (KeyCode::Left, mods) if mods == KeyModifiers::ALT || mods == KeyModifiers::CONTROL => {
                 if let Some((start, _)) = self.selection_range() {
                     self.editor.set_cursor(start);
                     self.clear_selection();
@@ -1070,9 +1068,7 @@ impl App {
                     self.editor.move_paragraph_up();
                 }
             }
-            (KeyCode::Down, mods)
-                if mods == KeyModifiers::ALT || mods == KeyModifiers::CONTROL =>
-            {
+            (KeyCode::Down, mods) if mods == KeyModifiers::ALT || mods == KeyModifiers::CONTROL => {
                 if let Some((_, end)) = self.selection_range() {
                     self.editor.set_cursor(end);
                     self.clear_selection();
@@ -2150,12 +2146,8 @@ fn styled_editor_lines(
 
             let local_start = sel_start.saturating_sub(line_start).min(line.len());
             let local_end = sel_end.saturating_sub(line_start).min(line.len());
-            let spans = apply_selection_to_styled_spans(
-                base.spans,
-                local_start,
-                local_end,
-                selected_style,
-            );
+            let spans =
+                apply_selection_to_styled_spans(base.spans, local_start, local_end, selected_style);
             Line::from(spans)
         })
         .collect()
@@ -2245,20 +2237,20 @@ where
     let event = read()?;
     match event {
         Event::Key(key) if key.kind == event::KeyEventKind::Press => Ok(Some(InputEvent::Key(key))),
-        Event::Mouse(mouse) if mouse.kind == MouseEventKind::ScrollUp => Ok(Some(
-            InputEvent::Scroll {
+        Event::Mouse(mouse) if mouse.kind == MouseEventKind::ScrollUp => {
+            Ok(Some(InputEvent::Scroll {
                 direction: -1,
                 column: mouse.column,
                 row: mouse.row,
-            },
-        )),
-        Event::Mouse(mouse) if mouse.kind == MouseEventKind::ScrollDown => Ok(Some(
-            InputEvent::Scroll {
+            }))
+        }
+        Event::Mouse(mouse) if mouse.kind == MouseEventKind::ScrollDown => {
+            Ok(Some(InputEvent::Scroll {
                 direction: 1,
                 column: mouse.column,
                 row: mouse.row,
-            },
-        )),
+            }))
+        }
         Event::Mouse(mouse) if mouse.kind == MouseEventKind::Down(MouseButton::Left) => {
             Ok(Some(InputEvent::MouseDown {
                 column: mouse.column,
@@ -3176,6 +3168,170 @@ mod tests {
     }
 
     #[test]
+    fn advanced_navigation_shortcuts_cover_selection_and_collapse_paths() {
+        let path = temp_path("advanced-nav");
+        let text = "one two\nthree four\n\nfive six".to_string();
+        fs::write(&path, &text).expect("seed");
+        let mut app = App::new_file(path.clone(), false, false, false, text).expect("app");
+        let mut running = true;
+
+        app.handle_key(key(KeyCode::Char('a'), KeyModifiers::CONTROL), &mut running)
+            .expect("ctrl+a");
+        assert_eq!(app.selection_range(), Some((0, app.editor.text().len())));
+        app.clear_selection();
+
+        app.editor.set_cursor(app.editor.text().len());
+        app.handle_key(
+            key(KeyCode::Left, KeyModifiers::SHIFT | KeyModifiers::CONTROL),
+            &mut running,
+        )
+        .expect("shift+ctrl+left");
+        app.handle_key(
+            key(KeyCode::Right, KeyModifiers::SHIFT | KeyModifiers::ALT),
+            &mut running,
+        )
+        .expect("shift+alt+right");
+
+        app.handle_key(
+            key(KeyCode::Up, KeyModifiers::SHIFT | KeyModifiers::ALT),
+            &mut running,
+        )
+        .expect("shift+alt+up");
+        app.handle_key(
+            key(KeyCode::Down, KeyModifiers::SHIFT | KeyModifiers::CONTROL),
+            &mut running,
+        )
+        .expect("shift+ctrl+down");
+
+        app.handle_key(
+            key(KeyCode::Left, KeyModifiers::SHIFT | KeyModifiers::SUPER),
+            &mut running,
+        )
+        .expect("shift+cmd+left");
+        app.handle_key(key(KeyCode::Home, KeyModifiers::SHIFT), &mut running)
+            .expect("shift+home");
+        app.handle_key(
+            key(KeyCode::Right, KeyModifiers::SHIFT | KeyModifiers::SUPER),
+            &mut running,
+        )
+        .expect("shift+cmd+right");
+        app.handle_key(key(KeyCode::End, KeyModifiers::SHIFT), &mut running)
+            .expect("shift+end");
+
+        app.handle_key(
+            key(KeyCode::Up, KeyModifiers::SHIFT | KeyModifiers::SUPER),
+            &mut running,
+        )
+        .expect("shift+cmd+up");
+        app.handle_key(
+            key(KeyCode::Home, KeyModifiers::SHIFT | KeyModifiers::CONTROL),
+            &mut running,
+        )
+        .expect("shift+ctrl+home");
+        app.handle_key(
+            key(KeyCode::Down, KeyModifiers::SHIFT | KeyModifiers::SUPER),
+            &mut running,
+        )
+        .expect("shift+cmd+down");
+        app.handle_key(
+            key(KeyCode::End, KeyModifiers::SHIFT | KeyModifiers::CONTROL),
+            &mut running,
+        )
+        .expect("shift+ctrl+end");
+
+        app.selection_anchor = Some(1);
+        app.editor.set_cursor(6);
+        app.handle_key(key(KeyCode::Left, KeyModifiers::ALT), &mut running)
+            .expect("alt left collapse");
+        app.selection_anchor = Some(1);
+        app.editor.set_cursor(6);
+        app.handle_key(key(KeyCode::Right, KeyModifiers::CONTROL), &mut running)
+            .expect("ctrl right collapse");
+        app.selection_anchor = Some(1);
+        app.editor.set_cursor(6);
+        app.handle_key(key(KeyCode::Up, KeyModifiers::ALT), &mut running)
+            .expect("alt up collapse");
+        app.selection_anchor = Some(1);
+        app.editor.set_cursor(6);
+        app.handle_key(key(KeyCode::Down, KeyModifiers::CONTROL), &mut running)
+            .expect("ctrl down collapse");
+        app.selection_anchor = Some(1);
+        app.editor.set_cursor(6);
+        app.handle_key(key(KeyCode::Left, KeyModifiers::SUPER), &mut running)
+            .expect("cmd left collapse");
+        app.selection_anchor = Some(1);
+        app.editor.set_cursor(6);
+        app.handle_key(key(KeyCode::Home, KeyModifiers::NONE), &mut running)
+            .expect("home collapse");
+        app.selection_anchor = Some(1);
+        app.editor.set_cursor(6);
+        app.handle_key(key(KeyCode::Right, KeyModifiers::SUPER), &mut running)
+            .expect("cmd right collapse");
+        app.selection_anchor = Some(1);
+        app.editor.set_cursor(6);
+        app.handle_key(key(KeyCode::End, KeyModifiers::NONE), &mut running)
+            .expect("end collapse");
+
+        app.handle_key(key(KeyCode::Up, KeyModifiers::SUPER), &mut running)
+            .expect("cmd up");
+        app.handle_key(key(KeyCode::Home, KeyModifiers::CONTROL), &mut running)
+            .expect("ctrl home");
+        app.handle_key(key(KeyCode::Down, KeyModifiers::SUPER), &mut running)
+            .expect("cmd down");
+        app.handle_key(key(KeyCode::End, KeyModifiers::CONTROL), &mut running)
+            .expect("ctrl end");
+
+        app.handle_key(
+            key(
+                KeyCode::Char('z'),
+                KeyModifiers::SUPER | KeyModifiers::SHIFT,
+            ),
+            &mut running,
+        )
+        .expect("cmd+shift+z");
+
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn delete_shortcuts_cover_forward_word_and_line_start_paths() {
+        let path = temp_path("delete-shortcuts");
+        fs::write(&path, "alpha beta\ngamma delta").expect("seed");
+        let mut app = App::new_file(
+            path.clone(),
+            false,
+            false,
+            false,
+            "alpha beta\ngamma delta".into(),
+        )
+        .expect("app");
+        let mut running = true;
+
+        app.editor.set_cursor(0);
+        app.handle_key(key(KeyCode::Delete, KeyModifiers::CONTROL), &mut running)
+            .expect("ctrl delete");
+        app.handle_key(key(KeyCode::Delete, KeyModifiers::NONE), &mut running)
+            .expect("delete");
+        app.editor.set_cursor(5);
+        app.handle_key(key(KeyCode::Backspace, KeyModifiers::SUPER), &mut running)
+            .expect("cmd backspace");
+        app.editor.set_cursor(app.editor.text().len());
+        app.handle_key(key(KeyCode::Backspace, KeyModifiers::ALT), &mut running)
+            .expect("alt backspace");
+
+        app.editor.set_cursor(2);
+        app.selection_anchor = Some(0);
+        app.handle_key(key(KeyCode::Delete, KeyModifiers::NONE), &mut running)
+            .expect("delete selection");
+        app.editor.set_cursor(2);
+        app.selection_anchor = Some(0);
+        app.handle_key(key(KeyCode::Backspace, KeyModifiers::CONTROL), &mut running)
+            .expect("backspace selection");
+
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
     fn help_overlay_handles_esc_and_ctrl_q() {
         let path = temp_path("help-close");
         fs::write(&path, "x").expect("seed");
@@ -3532,13 +3688,7 @@ mod tests {
             },
         )
         .expect("mouse drag");
-        assert_eq!(
-            drag,
-            Some(InputEvent::MouseDrag {
-                column: 4,
-                row: 5
-            })
-        );
+        assert_eq!(drag, Some(InputEvent::MouseDrag { column: 4, row: 5 }));
 
         let up_release = next_terminal_input(
             |_| Ok(true),
