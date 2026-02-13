@@ -12,7 +12,10 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use crossterm::ExecutableCommand;
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{
+    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyModifiers,
+    MouseEventKind,
+};
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
@@ -33,8 +36,10 @@ use crate::ui::render::{compose_status, truncate_middle};
 use crate::ui::theme::{ThemeTokens, build_theme, style_for_segment};
 use crate::watcher::{self, WatchMessage};
 use action::Action;
+use state::UiState;
 pub use state::{PaneFocus, ThemeChoice};
-use state::{UiState, default_split_ratio};
+
+const SCROLL_STEP_LINES: usize = 3;
 
 pub struct App {
     path: Option<PathBuf>,
@@ -50,6 +55,7 @@ pub struct App {
     editor_scroll: usize,
     preview_scroll: usize,
     editor_height: usize,
+    preview_height: usize,
     draw_time_us: u128,
     watch_event_count: u64,
     stream_event_count: u64,
@@ -88,6 +94,13 @@ struct PreviewCache {
     selected_anchor: Option<usize>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum InputEvent {
+    Key(KeyEvent),
+    ScrollUp,
+    ScrollDown,
+}
+
 impl App {
     pub fn new_file(
         path: PathBuf,
@@ -110,13 +123,14 @@ impl App {
             stream_mode: false,
             perf_mode,
             editor: EditorBuffer::new(initial_text),
-            status: "Ctrl+Q quit | Ctrl+S save | Ctrl+R reload | Ctrl+F search | F3/F3+Shift next/prev | Ctrl+H replace | Ctrl+G goto | Ctrl+J/Ctrl+U hunk | Ctrl+E apply hunk | Ctrl+K keep | Ctrl+M merge".into(),
+            status: "Ready".into(),
             _watcher: watcher,
             watch_rx,
             stream_rx: None,
             editor_scroll: 0,
             preview_scroll: 0,
             editor_height: 1,
+            preview_height: 1,
             draw_time_us: 0,
             watch_event_count: 0,
             stream_event_count: 0,
@@ -134,10 +148,7 @@ impl App {
             replace_target: String::new(),
             selected_conflict_hunk: 0,
             preview_cache: None,
-            ui: UiState {
-                split_ratio: default_split_ratio(120),
-                ..UiState::default()
-            },
+            ui: UiState::default(),
             term_width: 120,
             #[cfg(test)]
             test_next_key: None,
@@ -161,13 +172,14 @@ impl App {
             stream_mode: true,
             perf_mode,
             editor: EditorBuffer::new(String::new()),
-            status: "stream mode: stdin -> preview | Ctrl+Q quit".into(),
+            status: "Stream mode".into(),
             _watcher: None,
             watch_rx: None,
             stream_rx: Some(stream::start()),
             editor_scroll: 0,
             preview_scroll: 0,
             editor_height: 1,
+            preview_height: 1,
             draw_time_us: 0,
             watch_event_count: 0,
             stream_event_count: 0,
@@ -185,10 +197,7 @@ impl App {
             replace_target: String::new(),
             selected_conflict_hunk: 0,
             preview_cache: None,
-            ui: UiState {
-                split_ratio: default_split_ratio(120),
-                ..UiState::default()
-            },
+            ui: UiState::default(),
             term_width: 120,
             #[cfg(test)]
             test_next_key: None,
@@ -217,13 +226,14 @@ impl App {
             stream_mode: true,
             perf_mode,
             editor: EditorBuffer::new(String::new()),
-            status: "stream mode: stdin -> preview | Ctrl+Q quit".into(),
+            status: "Stream mode".into(),
             _watcher: None,
             watch_rx: None,
             stream_rx: None,
             editor_scroll: 0,
             preview_scroll: 0,
             editor_height: 1,
+            preview_height: 1,
             draw_time_us: 0,
             watch_event_count: 0,
             stream_event_count: 0,
@@ -241,10 +251,7 @@ impl App {
             replace_target: String::new(),
             selected_conflict_hunk: 0,
             preview_cache: None,
-            ui: UiState {
-                split_ratio: default_split_ratio(120),
-                ..UiState::default()
-            },
+            ui: UiState::default(),
             term_width: 120,
             test_next_key: None,
             test_next_key_result: None,
@@ -299,6 +306,9 @@ impl App {
     pub fn run(&mut self) -> Result<()> {
         let mut stdout = io::stdout();
         stdout.execute(EnterAlternateScreen)?;
+        if self.interactive_input {
+            stdout.execute(EnableMouseCapture)?;
+        }
         let backend = CrosstermBackend::new(stdout);
         let mut terminal = Terminal::new(backend)?;
 
@@ -307,6 +317,9 @@ impl App {
         let loop_result = self.run_loop(&mut terminal);
 
         toggle_raw_mode(self.interactive_input, disable_raw_mode)?;
+        if self.interactive_input {
+            terminal.backend_mut().execute(DisableMouseCapture)?;
+        }
         terminal.backend_mut().execute(LeaveAlternateScreen)?;
         terminal.show_cursor()?;
 
@@ -337,9 +350,13 @@ impl App {
             }
 
             if self.interactive_input
-                && let Some(key) = self.next_key_event()?
+                && let Some(input_event) = self.next_input_event()?
             {
-                self.handle_key(key, &mut running)?;
+                match input_event {
+                    InputEvent::Key(key) => self.handle_key(key, &mut running)?,
+                    InputEvent::ScrollUp => self.scroll_active_viewport(-1),
+                    InputEvent::ScrollDown => self.scroll_active_viewport(1),
+                }
             }
         }
 
@@ -436,25 +453,37 @@ impl App {
             update::apply_action(&mut self.ui, action, self.term_width);
             match action {
                 Action::ToggleFocus => {
+                    if self.ui.focus == PaneFocus::Preview {
+                        self.preview_scroll = self.editor_scroll;
+                    }
                     self.status = match self.ui.focus {
-                        PaneFocus::Editor => "Focus: editor".into(),
-                        PaneFocus::Preview => "Focus: preview".into(),
+                        PaneFocus::Editor => "Mode: editor".into(),
+                        PaneFocus::Preview => "Mode: view".into(),
                     };
                 }
                 Action::ToggleHelp => {
                     self.status = if self.ui.help_open {
-                        "Help opened".into()
+                        "Settings opened".into()
                     } else {
-                        "Help closed".into()
+                        "Settings closed".into()
                     };
                 }
-                Action::AdjustSplit(delta) => {
-                    self.status = format!("Split {delta:+}% => {}%", self.ui.split_ratio);
-                }
-                Action::ResetSplit => {
-                    self.status = format!("Split reset => {}%", self.ui.split_ratio);
-                }
                 Action::ApplyPrefs { .. } => {}
+            }
+            return Ok(());
+        }
+
+        if self.ui.help_open {
+            match (key.code, key.modifiers) {
+                (KeyCode::Esc, _) => {
+                    self.ui.help_open = false;
+                    self.status = "Settings closed".into();
+                }
+                (KeyCode::Char('q'), KeyModifiers::CONTROL) => {
+                    self.ui.help_open = false;
+                    *running = false;
+                }
+                _ => {}
             }
             return Ok(());
         }
@@ -713,10 +742,21 @@ impl App {
             (KeyCode::Up, _) => self.editor.move_up(),
             (KeyCode::Down, _) => self.editor.move_down(),
             (KeyCode::PageUp, _) => {
-                self.editor_scroll = self.editor_scroll.saturating_sub(self.editor_height.max(1));
+                if self.ui.focus == PaneFocus::Editor {
+                    self.editor_scroll =
+                        self.editor_scroll.saturating_sub(self.editor_height.max(1));
+                } else {
+                    self.preview_scroll = self
+                        .preview_scroll
+                        .saturating_sub(self.preview_height.max(1));
+                }
             }
             (KeyCode::PageDown, _) => {
-                self.editor_scroll += self.editor_height.max(1);
+                if self.ui.focus == PaneFocus::Editor {
+                    self.editor_scroll += self.editor_height.max(1);
+                } else {
+                    self.preview_scroll += self.preview_height.max(1);
+                }
             }
             (KeyCode::Enter, _) => {
                 if !self.readonly {
@@ -743,17 +783,19 @@ impl App {
         Ok(())
     }
 
-    fn next_key_event(&mut self) -> Result<Option<KeyEvent>> {
+    fn next_input_event(&mut self) -> Result<Option<InputEvent>> {
         #[cfg(test)]
         {
             if let Some(result) = self.test_next_key_result.take() {
-                return result.map_err(Into::into);
+                return result
+                    .map(|event| event.map(InputEvent::Key))
+                    .map_err(Into::into);
             }
             if let Some(key) = self.test_next_key.take() {
-                return Ok(Some(key));
+                return Ok(Some(InputEvent::Key(key)));
             }
         }
-        next_pressed_key(event::poll, event::read)
+        next_terminal_input(event::poll, event::read)
     }
 
     fn ensure_cursor_visible(&mut self) {
@@ -763,8 +805,33 @@ impl App {
         } else if cursor_line >= self.editor_scroll + self.editor_height {
             self.editor_scroll = cursor_line.saturating_sub(self.editor_height.saturating_sub(1));
         }
+    }
 
-        self.preview_scroll = self.editor_scroll;
+    fn scroll_active_viewport(&mut self, direction: i8) {
+        let amount = SCROLL_STEP_LINES;
+        if self.ui.focus == PaneFocus::Editor {
+            let total = to_lines(self.editor.text()).len();
+            if direction < 0 {
+                self.editor_scroll = self.editor_scroll.saturating_sub(amount);
+            } else {
+                self.editor_scroll = self.editor_scroll.saturating_add(amount);
+            }
+            self.editor_scroll = clamp_scroll(self.editor_scroll, total, self.editor_height.max(1));
+            return;
+        }
+
+        let preview_width = self.term_width.saturating_sub(2).max(1);
+        let (preview_lines, _) = self.preview_lines_cached(preview_width);
+        if direction < 0 {
+            self.preview_scroll = self.preview_scroll.saturating_sub(amount);
+        } else {
+            self.preview_scroll = self.preview_scroll.saturating_add(amount);
+        }
+        self.preview_scroll = clamp_scroll(
+            self.preview_scroll,
+            preview_lines.len(),
+            self.preview_height.max(1),
+        );
     }
 
     fn clear_replace_mode(&mut self) {
@@ -1029,7 +1096,7 @@ impl App {
         let info = self.info_line(vertical[0].width as usize);
         frame.render_widget(Paragraph::new(info).style(theme.top_bar), vertical[0]);
 
-        let pane_layout = compute_pane_layout(vertical[1], self.ui.focus, self.ui.split_ratio);
+        let pane_layout = compute_pane_layout(vertical[1], self.ui.focus);
         let compact = pane_layout.kind == LayoutKind::Compact;
 
         if pane_layout.editor.width > 0 && pane_layout.editor.height > 0 {
@@ -1052,6 +1119,7 @@ impl App {
 
         if pane_layout.preview.width > 0 && pane_layout.preview.height > 0 {
             let preview_height = pane_layout.preview.height.saturating_sub(2) as usize;
+            self.preview_height = preview_height.max(1);
             let preview_width = pane_layout.preview.width.saturating_sub(2);
             let (preview_lines, selected_anchor) = self.preview_lines_cached(preview_width);
 
@@ -1065,14 +1133,14 @@ impl App {
             self.preview_scroll = clamp_scroll(
                 self.preview_scroll,
                 preview_lines.len(),
-                preview_height.max(1),
+                self.preview_height,
             );
 
             let mut in_code = code_open_before(preview_lines.as_ref(), self.preview_scroll);
             let preview_visible = preview_lines
                 .iter()
                 .skip(self.preview_scroll)
-                .take(preview_height.max(1))
+                .take(self.preview_height)
                 .map(|line| styled_preview_line(line, preview_width, &theme, &mut in_code))
                 .collect::<Vec<_>>();
 
@@ -1111,12 +1179,12 @@ impl App {
         );
 
         if self.ui.help_open {
-            let popup = centered_popup(76, 9, area);
+            let popup = centered_popup(76, 13, area);
             frame.render_widget(Clear, popup);
             let help_widget = Paragraph::new(help::help_text()).style(theme.help).block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .title("Help")
+                    .title("Settings")
                     .border_style(theme.pane_focus),
             );
             frame.render_widget(help_widget, popup);
@@ -1147,12 +1215,12 @@ impl App {
         let mode = mode_label(self);
         let ro = if self.readonly { "RO" } else { "RW" };
         let dirty = if self.editor.dirty { "dirty" } else { "clean" };
-        let focus = match self.ui.focus {
+        let view_mode = match self.ui.focus {
             PaneFocus::Editor => "editor",
-            PaneFocus::Preview => "preview",
+            PaneFocus::Preview => "view",
         };
         let line = format!(
-            "{} | {ro} | {dirty} | mode={mode} | focus={focus}",
+            "{} | {ro} | {dirty} | mode={mode} | view={view_mode}",
             truncate_middle(&path, width.saturating_sub(32).max(12))
         );
         if line.chars().count() > width {
@@ -1172,9 +1240,9 @@ impl App {
         } else if self.goto_mode {
             "goto: Enter apply"
         } else if self.ui.help_open {
-            "Ctrl+/ close help"
+            "Esc close settings"
         } else {
-            "Tab focus | Ctrl+/ help"
+            "Tab mode | Ctrl+/ settings"
         };
 
         if let Some(conflict) = self.editor.conflict()
@@ -1381,7 +1449,7 @@ where
     Ok(())
 }
 
-fn next_pressed_key<P, R>(mut poll: P, mut read: R) -> Result<Option<KeyEvent>>
+fn next_terminal_input<P, R>(mut poll: P, mut read: R) -> Result<Option<InputEvent>>
 where
     P: FnMut(Duration) -> io::Result<bool>,
     R: FnMut() -> io::Result<Event>,
@@ -1390,12 +1458,28 @@ where
         return Ok(None);
     }
     let event = read()?;
-    if let Event::Key(key) = event
-        && key.kind == event::KeyEventKind::Press
-    {
-        return Ok(Some(key));
+    match event {
+        Event::Key(key) if key.kind == event::KeyEventKind::Press => Ok(Some(InputEvent::Key(key))),
+        Event::Mouse(mouse) if mouse.kind == MouseEventKind::ScrollUp => {
+            Ok(Some(InputEvent::ScrollUp))
+        }
+        Event::Mouse(mouse) if mouse.kind == MouseEventKind::ScrollDown => {
+            Ok(Some(InputEvent::ScrollDown))
+        }
+        _ => Ok(None),
     }
-    Ok(None)
+}
+
+#[cfg(test)]
+fn next_pressed_key<P, R>(poll: P, read: R) -> Result<Option<KeyEvent>>
+where
+    P: FnMut(Duration) -> io::Result<bool>,
+    R: FnMut() -> io::Result<Event>,
+{
+    match next_terminal_input(poll, read)? {
+        Some(InputEvent::Key(key)) => Ok(Some(key)),
+        _ => Ok(None),
+    }
 }
 
 #[cfg(test)]
@@ -1406,7 +1490,10 @@ mod tests {
     use std::sync::mpsc;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
+    use crossterm::event::{
+        Event, KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers, MouseEvent,
+        MouseEventKind,
+    };
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
@@ -1415,9 +1502,10 @@ mod tests {
     use crate::watcher::WatchMessage;
 
     use super::{
-        App, PaneFocus, ThemeChoice, centered_popup, clamp_scroll, code_open_before, cursor_rect,
-        mode_label, next_pressed_key, pane_border_style, preview_title, slice_lines, status_line,
-        status_style, styled_preview_line, to_lines, toggle_raw_mode,
+        App, InputEvent, PaneFocus, ThemeChoice, centered_popup, clamp_scroll, code_open_before,
+        cursor_rect, mode_label, next_pressed_key, next_terminal_input, pane_border_style,
+        preview_title, slice_lines, status_line, status_style, styled_preview_line, to_lines,
+        toggle_raw_mode,
     };
 
     fn temp_path(name: &str) -> PathBuf {
@@ -1897,10 +1985,7 @@ mod tests {
         tx.send(WatchMessage::ExternalUpdate("local".into()))
             .expect("send same");
         app.handle_watch_updates();
-        assert_eq!(
-            app.status,
-            "Ctrl+Q quit | Ctrl+S save | Ctrl+R reload | Ctrl+F search | F3/F3+Shift next/prev | Ctrl+H replace | Ctrl+G goto | Ctrl+J/Ctrl+U hunk | Ctrl+E apply hunk | Ctrl+K keep | Ctrl+M merge"
-        );
+        assert_eq!(app.status, "Ready");
 
         tx.send(WatchMessage::ExternalUpdate("disk".into()))
             .expect("send update");
@@ -1974,6 +2059,7 @@ mod tests {
         let path = temp_path("draw");
         fs::write(&path, "a\nb").expect("seed");
         let mut app = App::new_file(path.clone(), false, false, true, "a\nb".into()).expect("app");
+        app.set_initial_focus(PaneFocus::Preview);
         app.editor.insert_char('!');
         app.editor.on_external_change("a\nB\nc".into());
         app.editor_scroll = 0;
@@ -2095,6 +2181,93 @@ mod tests {
     }
 
     #[test]
+    fn tab_switches_mode_and_updates_status() {
+        let path = temp_path("mode-toggle");
+        fs::write(&path, "x").expect("seed");
+        let mut app = App::new_file(path.clone(), false, false, false, "x".into()).expect("app");
+        let mut running = true;
+
+        app.handle_key(key(KeyCode::Tab, KeyModifiers::NONE), &mut running)
+            .expect("tab");
+
+        assert_eq!(app.status, "Mode: view");
+
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn settings_overlay_blocks_edit_keys_until_closed() {
+        let path = temp_path("settings-overlay");
+        fs::write(&path, "x").expect("seed");
+        let mut app = App::new_file(path.clone(), false, false, false, "x".into()).expect("app");
+        let mut running = true;
+
+        app.handle_key(key(KeyCode::Char('/'), KeyModifiers::CONTROL), &mut running)
+            .expect("open settings");
+        assert_eq!(app.status, "Settings opened");
+
+        app.handle_key(key(KeyCode::Char('z'), KeyModifiers::NONE), &mut running)
+            .expect("type while settings open");
+        assert_eq!(app.editor.text(), "x");
+
+        app.handle_key(key(KeyCode::Char('/'), KeyModifiers::CONTROL), &mut running)
+            .expect("close settings");
+        app.handle_key(key(KeyCode::Char('z'), KeyModifiers::NONE), &mut running)
+            .expect("type after close");
+        assert_eq!(app.editor.text(), "xz");
+
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn page_scroll_in_view_mode_moves_viewport_not_cursor() {
+        let path = temp_path("view-scroll");
+        let text = (0..80)
+            .map(|n| format!("line {n}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        fs::write(&path, &text).expect("seed");
+        let mut app = App::new_file(path.clone(), false, false, false, text).expect("app");
+        let mut running = true;
+
+        app.handle_key(key(KeyCode::Tab, KeyModifiers::NONE), &mut running)
+            .expect("to view");
+        let cursor_before = app.editor.line_col_at_cursor().0;
+
+        app.handle_key(key(KeyCode::PageDown, KeyModifiers::NONE), &mut running)
+            .expect("page down");
+
+        assert!(app.preview_scroll > 0);
+        assert_eq!(app.editor.line_col_at_cursor().0, cursor_before);
+
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn wheel_scroll_in_view_mode_moves_viewport_not_cursor() {
+        let path = temp_path("wheel-view-scroll");
+        let text = (0..80)
+            .map(|n| format!("line {n}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        fs::write(&path, &text).expect("seed");
+        let mut app = App::new_file(path.clone(), false, false, false, text).expect("app");
+        let mut running = true;
+
+        app.handle_key(key(KeyCode::Tab, KeyModifiers::NONE), &mut running)
+            .expect("to view");
+        let cursor_before = app.editor.line_col_at_cursor().0;
+        app.preview_height = 12;
+
+        app.scroll_active_viewport(1);
+
+        assert!(app.preview_scroll > 0);
+        assert_eq!(app.editor.line_col_at_cursor().0, cursor_before);
+
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
     fn run_loop_handles_stream_done_non_interactive() {
         let mut app = App::new_stream_for_test(false);
         app.interactive_input = false;
@@ -2199,10 +2372,41 @@ mod tests {
     }
 
     #[test]
+    fn next_terminal_input_maps_mouse_scroll() {
+        let up = next_terminal_input(
+            |_| Ok(true),
+            || {
+                Ok(Event::Mouse(MouseEvent {
+                    kind: MouseEventKind::ScrollUp,
+                    column: 1,
+                    row: 1,
+                    modifiers: KeyModifiers::NONE,
+                }))
+            },
+        )
+        .expect("scroll up");
+        assert_eq!(up, Some(InputEvent::ScrollUp));
+
+        let down = next_terminal_input(
+            |_| Ok(true),
+            || {
+                Ok(Event::Mouse(MouseEvent {
+                    kind: MouseEventKind::ScrollDown,
+                    column: 1,
+                    row: 1,
+                    modifiers: KeyModifiers::NONE,
+                }))
+            },
+        )
+        .expect("scroll down");
+        assert_eq!(down, Some(InputEvent::ScrollDown));
+    }
+
+    #[test]
     fn next_key_event_falls_back_to_terminal_poll() {
         let mut app = App::new_stream_for_test(false);
         app.test_next_key = None;
-        let _ = app.next_key_event();
+        let _ = app.next_input_event();
     }
 
     #[test]
@@ -2344,6 +2548,7 @@ mod tests {
         let path = temp_path("preview-cache");
         fs::write(&path, "one").expect("seed");
         let mut app = App::new_file(path.clone(), false, false, false, "one".into()).expect("app");
+        app.set_initial_focus(PaneFocus::Preview);
         let mut terminal = Terminal::new(TestBackend::new(120, 30)).expect("terminal");
 
         terminal.draw(|frame| app.draw(frame)).expect("first draw");
@@ -2389,7 +2594,7 @@ mod tests {
     fn helper_mode_and_status_branches() {
         let mut app = App::new_stream_for_test(false);
         assert_eq!(mode_label(&app), "stream");
-        assert_eq!(app.status_hint(), "Tab focus | Ctrl+/ help");
+        assert_eq!(app.status_hint(), "Tab mode | Ctrl+/ settings");
 
         app.search_mode = true;
         assert_eq!(mode_label(&app), "search");
@@ -2407,7 +2612,7 @@ mod tests {
 
         app.replace_find_mode = false;
         app.ui.help_open = true;
-        assert_eq!(app.status_hint(), "Ctrl+/ close help");
+        assert_eq!(app.status_hint(), "Esc close settings");
     }
 
     #[test]
@@ -2420,7 +2625,7 @@ mod tests {
 
         let info = app.info_line(140);
         assert!(info.contains("mode=conflict"));
-        assert!(info.contains("focus=editor"));
+        assert!(info.contains("view=editor"));
 
         let title = preview_title(0, app.editor.conflict());
         assert!(title.contains("Preview [conflict 1/"));

@@ -41,7 +41,7 @@ struct Cli {
     #[arg(long, default_value_t = false)]
     no_color: bool,
 
-    /// Initial pane focus
+    /// Initial view mode
     #[arg(long, value_enum, default_value_t = CliFocus::Editor)]
     focus: CliFocus,
 }
@@ -56,7 +56,8 @@ enum CliTheme {
 #[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq)]
 enum CliFocus {
     Editor,
-    Preview,
+    #[value(alias = "preview")]
+    View,
 }
 
 fn main() -> Result<()> {
@@ -106,7 +107,7 @@ fn apply_ui_flags(app: &mut app::App, theme: CliTheme, no_color: bool, focus: Cl
     };
     let focus = match focus {
         CliFocus::Editor => app::PaneFocus::Editor,
-        CliFocus::Preview => app::PaneFocus::Preview,
+        CliFocus::View => app::PaneFocus::Preview,
     };
     app.set_theme(theme);
     app.set_no_color(no_color);

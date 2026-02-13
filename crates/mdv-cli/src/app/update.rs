@@ -1,7 +1,7 @@
 use super::action::Action;
-use super::state::{PaneFocus, UiState, clamp_split_ratio, default_split_ratio};
+use super::state::{PaneFocus, UiState};
 
-pub fn apply_action(ui: &mut UiState, action: Action, term_width: u16) {
+pub fn apply_action(ui: &mut UiState, action: Action, _term_width: u16) {
     match action {
         Action::ToggleFocus => {
             ui.focus = match ui.focus {
@@ -10,15 +10,6 @@ pub fn apply_action(ui: &mut UiState, action: Action, term_width: u16) {
             };
         }
         Action::ToggleHelp => ui.help_open = !ui.help_open,
-        Action::AdjustSplit(delta) => {
-            let next = if delta < 0 {
-                ui.split_ratio.saturating_sub(delta.unsigned_abs())
-            } else {
-                ui.split_ratio.saturating_add(delta as u16)
-            };
-            ui.split_ratio = clamp_split_ratio(next);
-        }
-        Action::ResetSplit => ui.split_ratio = default_split_ratio(term_width),
         Action::ApplyPrefs {
             focus,
             theme,
@@ -46,21 +37,6 @@ mod tests {
 
         apply_action(&mut ui, Action::ToggleHelp, 120);
         assert!(ui.help_open);
-    }
-
-    #[test]
-    fn split_adjust_and_reset() {
-        let mut ui = UiState {
-            split_ratio: 50,
-            ..UiState::default()
-        };
-        apply_action(&mut ui, Action::AdjustSplit(-50), 120);
-        assert_eq!(ui.split_ratio, 30);
-        apply_action(&mut ui, Action::AdjustSplit(60), 120);
-        assert_eq!(ui.split_ratio, 70);
-
-        apply_action(&mut ui, Action::ResetSplit, 140);
-        assert_eq!(ui.split_ratio, 55);
     }
 
     #[test]
