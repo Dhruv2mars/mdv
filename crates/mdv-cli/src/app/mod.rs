@@ -30,13 +30,13 @@ use ratatui::{Frame, Terminal};
 #[cfg(not(test))]
 use crate::stream;
 use crate::stream::StreamMessage;
-use crate::ui::help;
+use crate::ui::docs;
 use crate::ui::layout::{LayoutKind, compute_pane_layout};
 use crate::ui::render::{compose_status, truncate_middle};
 use crate::ui::theme::{ThemeTokens, build_theme, style_for_segment};
 use crate::watcher::{self, WatchMessage};
 use action::Action;
-use state::UiState;
+use state::{HelpNavAction, UiState, apply_help_nav};
 pub use state::{PaneFocus, ThemeChoice};
 
 const SCROLL_STEP_LINES: usize = 3;
@@ -81,6 +81,10 @@ pub struct App {
     editor_area: Rect,
     preview_area: Rect,
     editor_text_area: Rect,
+    help_page_lines: usize,
+    onboarding_marker_path: Option<PathBuf>,
+    onboarding_seen: bool,
+    onboarding_gate_checked: bool,
     mouse_drag_anchor: Option<usize>,
     #[cfg(test)]
     test_next_key: Option<KeyEvent>,
@@ -129,6 +133,7 @@ impl App {
         perf_mode: bool,
         initial_text: String,
     ) -> Result<Self> {
+        let (onboarding_marker_path, onboarding_seen) = onboarding_marker_state();
         let (watcher, watch_rx) = if watch_enabled {
             let (watcher, watch_rx) = watcher::start(&path)?;
             (Some(watcher), Some(watch_rx))
@@ -176,6 +181,10 @@ impl App {
             editor_area: Rect::default(),
             preview_area: Rect::default(),
             editor_text_area: Rect::default(),
+            help_page_lines: 1,
+            onboarding_marker_path,
+            onboarding_seen,
+            onboarding_gate_checked: false,
             mouse_drag_anchor: None,
             #[cfg(test)]
             test_next_key: None,
@@ -192,6 +201,7 @@ impl App {
 
     #[cfg(not(test))]
     pub fn new_stream(perf_mode: bool) -> Result<Self> {
+        let (onboarding_marker_path, onboarding_seen) = onboarding_marker_state();
         Ok(Self {
             path: None,
             readonly: true,
@@ -232,6 +242,10 @@ impl App {
             editor_area: Rect::default(),
             preview_area: Rect::default(),
             editor_text_area: Rect::default(),
+            help_page_lines: 1,
+            onboarding_marker_path,
+            onboarding_seen,
+            onboarding_gate_checked: false,
             mouse_drag_anchor: None,
             #[cfg(test)]
             test_next_key: None,
@@ -253,6 +267,7 @@ impl App {
 
     #[cfg(test)]
     fn new_stream_for_test(perf_mode: bool) -> Self {
+        let (onboarding_marker_path, onboarding_seen) = onboarding_marker_state();
         Self {
             path: None,
             readonly: true,
@@ -293,6 +308,10 @@ impl App {
             editor_area: Rect::default(),
             preview_area: Rect::default(),
             editor_text_area: Rect::default(),
+            help_page_lines: 1,
+            onboarding_marker_path,
+            onboarding_seen,
+            onboarding_gate_checked: false,
             mouse_drag_anchor: None,
             test_next_key: None,
             test_next_key_result: None,
@@ -303,6 +322,7 @@ impl App {
     }
 
     pub fn new_home(readonly: bool, watch_enabled: bool, perf_mode: bool) -> Result<Self> {
+        let (onboarding_marker_path, onboarding_seen) = onboarding_marker_state();
         Ok(Self {
             path: None,
             readonly,
@@ -343,6 +363,10 @@ impl App {
             editor_area: Rect::default(),
             preview_area: Rect::default(),
             editor_text_area: Rect::default(),
+            help_page_lines: 1,
+            onboarding_marker_path,
+            onboarding_seen,
+            onboarding_gate_checked: false,
             mouse_drag_anchor: None,
             #[cfg(test)]
             test_next_key: None,
@@ -431,6 +455,7 @@ impl App {
 
     fn run_loop<B: Backend>(&mut self, terminal: &mut Terminal<B>) -> Result<()> {
         let mut running = true;
+        self.maybe_open_onboarding();
 
         while running {
             self.handle_watch_updates();
@@ -566,7 +591,7 @@ impl App {
             && key.modifiers == KeyModifiers::NONE
             && self.ui.focus == PaneFocus::Editor
             && !self.home_mode
-            && !self.ui.help_open
+            && !self.ui.help.open
             && !self.search_mode
             && !self.goto_mode
             && !self.replace_find_mode
@@ -584,9 +609,9 @@ impl App {
         }
 
         if let Some(action) = input::map_global_key(key) {
-            update::apply_action(&mut self.ui, action, self.term_width);
             match action {
                 Action::ToggleFocus => {
+                    update::apply_action(&mut self.ui, action, self.term_width);
                     if self.ui.focus == PaneFocus::Preview {
                         self.preview_scroll = self.editor_scroll;
                     }
@@ -597,27 +622,125 @@ impl App {
                     };
                 }
                 Action::ToggleHelp => {
-                    self.status = if self.ui.help_open {
-                        "Settings opened".into()
+                    if self.ui.help.open {
+                        self.close_docs_modal();
+                        self.status = "Docs closed".into();
                     } else {
-                        "Settings closed".into()
-                    };
+                        self.open_docs_modal();
+                        self.status = "Docs opened".into();
+                    }
                 }
-                Action::ApplyPrefs { .. } => {}
+                Action::ApplyPrefs { .. } => {
+                    update::apply_action(&mut self.ui, action, self.term_width);
+                }
             }
             return Ok(());
         }
 
-        if self.ui.help_open {
+        if self.ui.help.open {
+            let section_count = docs::section_count(self.active_docs_catalog());
+            let content_lines = self.active_help_line_count();
+            let page_lines = self.help_page_lines.max(1);
             match (key.code, key.modifiers) {
                 (KeyCode::Esc, _) => {
-                    self.ui.help_open = false;
-                    self.status = "Settings closed".into();
+                    self.close_docs_modal();
+                    self.status = "Docs closed".into();
                 }
                 (KeyCode::Char('q'), KeyModifiers::CONTROL) => {
-                    self.ui.help_open = false;
+                    self.close_docs_modal();
                     *running = false;
                 }
+                (KeyCode::Up, _) => apply_help_nav(
+                    &mut self.ui.help,
+                    HelpNavAction::Up,
+                    section_count,
+                    content_lines,
+                    page_lines,
+                ),
+                (KeyCode::Down, _) => apply_help_nav(
+                    &mut self.ui.help,
+                    HelpNavAction::Down,
+                    section_count,
+                    content_lines,
+                    page_lines,
+                ),
+                (KeyCode::PageUp, _) => apply_help_nav(
+                    &mut self.ui.help,
+                    HelpNavAction::PageUp,
+                    section_count,
+                    content_lines,
+                    page_lines,
+                ),
+                (KeyCode::PageDown, _) => apply_help_nav(
+                    &mut self.ui.help,
+                    HelpNavAction::PageDown,
+                    section_count,
+                    content_lines,
+                    page_lines,
+                ),
+                (KeyCode::Home, _) => apply_help_nav(
+                    &mut self.ui.help,
+                    HelpNavAction::Home,
+                    section_count,
+                    content_lines,
+                    page_lines,
+                ),
+                (KeyCode::End, _) => apply_help_nav(
+                    &mut self.ui.help,
+                    HelpNavAction::End,
+                    section_count,
+                    content_lines,
+                    page_lines,
+                ),
+                (KeyCode::Left, _) => apply_help_nav(
+                    &mut self.ui.help,
+                    HelpNavAction::FocusLeft,
+                    section_count,
+                    content_lines,
+                    page_lines,
+                ),
+                (KeyCode::Right, _) => apply_help_nav(
+                    &mut self.ui.help,
+                    HelpNavAction::FocusRight,
+                    section_count,
+                    content_lines,
+                    page_lines,
+                ),
+                (KeyCode::Tab, _) => apply_help_nav(
+                    &mut self.ui.help,
+                    HelpNavAction::ToggleFocus,
+                    section_count,
+                    content_lines,
+                    page_lines,
+                ),
+                (KeyCode::Char('k'), KeyModifiers::NONE) if !self.ui.help.index_focus => {
+                    apply_help_nav(
+                        &mut self.ui.help,
+                        HelpNavAction::Up,
+                        section_count,
+                        content_lines,
+                        page_lines,
+                    )
+                }
+                (KeyCode::Char('j'), KeyModifiers::NONE) if !self.ui.help.index_focus => {
+                    apply_help_nav(
+                        &mut self.ui.help,
+                        HelpNavAction::Down,
+                        section_count,
+                        content_lines,
+                        page_lines,
+                    )
+                }
+                (KeyCode::Enter, _) if self.ui.help.is_onboarding() && !self.ui.help.index_focus => {
+                    self.advance_onboarding_step();
+                }
+                (KeyCode::Enter, _) => apply_help_nav(
+                    &mut self.ui.help,
+                    HelpNavAction::OpenSection,
+                    section_count,
+                    content_lines,
+                    page_lines,
+                ),
                 _ => {}
             }
             return Ok(());
@@ -1398,7 +1521,7 @@ impl App {
     }
 
     fn handle_mouse_down(&mut self, column: u16, row: u16, modifiers: KeyModifiers) {
-        if self.home_mode || self.ui.help_open {
+        if self.home_mode || self.ui.help.open {
             return;
         }
         if point_in_rect(column, row, self.preview_area) {
@@ -1433,7 +1556,7 @@ impl App {
     }
 
     fn handle_mouse_drag(&mut self, column: u16, row: u16) {
-        if self.ui.focus != PaneFocus::Editor || self.home_mode || self.ui.help_open {
+        if self.ui.focus != PaneFocus::Editor || self.home_mode || self.ui.help.open {
             return;
         }
         let Some(anchor) = self.mouse_drag_anchor else {
@@ -1703,6 +1826,195 @@ impl App {
         )
     }
 
+    fn active_docs_catalog(&self) -> &'static docs::DocCatalog {
+        if self.ui.help.is_onboarding() {
+            docs::onboarding_catalog()
+        } else {
+            docs::user_docs_catalog()
+        }
+    }
+
+    fn active_help_section(&self) -> docs::DocSection {
+        docs::section(self.active_docs_catalog(), self.ui.help.section_idx)
+    }
+
+    fn active_help_line_count(&self) -> usize {
+        docs::section_line_count(&self.active_help_section())
+    }
+
+    fn open_docs_modal(&mut self) {
+        self.ui.help.open_docs();
+        let sections = docs::section_count(self.active_docs_catalog());
+        if sections > 0 {
+            self.ui.help.section_idx = self.ui.help.section_idx.min(sections.saturating_sub(1));
+        } else {
+            self.ui.help.section_idx = 0;
+        }
+        self.ui.help.scroll = 0;
+    }
+
+    fn close_docs_modal(&mut self) {
+        let was_onboarding = self.ui.help.is_onboarding();
+        self.ui.help.close();
+        if was_onboarding {
+            self.persist_onboarding_marker();
+        }
+    }
+
+    fn maybe_open_onboarding(&mut self) {
+        if self.onboarding_gate_checked {
+            return;
+        }
+        self.onboarding_gate_checked = true;
+        if self.home_mode && self.interactive_input && !self.onboarding_seen {
+            self.ui.help.open_onboarding();
+            self.status = "Welcome guide opened".into();
+        }
+    }
+
+    fn advance_onboarding_step(&mut self) {
+        let total = docs::section_count(docs::onboarding_catalog());
+        let step = self
+            .ui
+            .help
+            .onboarding_step
+            .unwrap_or(self.ui.help.section_idx)
+            .min(total.saturating_sub(1));
+        if step + 1 >= total {
+            self.close_docs_modal();
+            self.status = "Onboarding complete".into();
+            return;
+        }
+        self.ui.help.section_idx = step + 1;
+        self.ui.help.onboarding_step = Some(step + 1);
+        self.ui.help.scroll = 0;
+    }
+
+    fn persist_onboarding_marker(&mut self) {
+        let Some(path) = &self.onboarding_marker_path else {
+            self.onboarding_seen = false;
+            return;
+        };
+        let mut ok = true;
+        if let Some(parent) = path.parent()
+            && fs::create_dir_all(parent).is_err()
+        {
+            ok = false;
+        }
+        if ok && fs::write(path, b"1\n").is_err() {
+            ok = false;
+        }
+        self.onboarding_seen = ok;
+    }
+
+    fn draw_docs_modal(&mut self, frame: &mut Frame<'_>, area: Rect, theme: &ThemeTokens) {
+        let popup = docs_modal_rect(area);
+        frame.render_widget(Clear, popup);
+        frame.render_widget(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(self.active_docs_catalog().title)
+                .border_style(theme.pane_focus),
+            popup,
+        );
+        if popup.width <= 2 || popup.height <= 2 {
+            return;
+        }
+
+        let inner = Rect {
+            x: popup.x + 1,
+            y: popup.y + 1,
+            width: popup.width.saturating_sub(2),
+            height: popup.height.saturating_sub(2),
+        };
+        if inner.width == 0 || inner.height == 0 {
+            return;
+        }
+
+        let rows = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(1),
+                Constraint::Min(1),
+                Constraint::Length(1),
+            ])
+            .split(inner);
+        let body = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Length((inner.width / 3).max(22).min(inner.width.saturating_sub(10))),
+                Constraint::Min(8),
+            ])
+            .split(rows[1]);
+
+        let catalog = self.active_docs_catalog();
+        let section_count = docs::section_count(catalog);
+        if section_count == 0 {
+            return;
+        }
+        self.ui.help.section_idx = self.ui.help.section_idx.min(section_count.saturating_sub(1));
+        let section = docs::section(catalog, self.ui.help.section_idx);
+        let lines = docs::render_section(&section, theme);
+        self.help_page_lines = body[1].height.max(1) as usize;
+        let max_scroll = lines.len().saturating_sub(self.help_page_lines.max(1));
+        self.ui.help.scroll = self.ui.help.scroll.min(max_scroll);
+        let total_pages = ((lines.len() + self.help_page_lines.saturating_sub(1))
+            / self.help_page_lines.max(1))
+        .max(1);
+        let current_page = (self.ui.help.scroll / self.help_page_lines.max(1)).saturating_add(1);
+        let top = format!(
+            "{} ({}) | {}/{} | page {}/{}",
+            section.title,
+            section.id,
+            self.ui.help.section_idx + 1,
+            section_count,
+            current_page.min(total_pages),
+            total_pages
+        );
+        frame.render_widget(Paragraph::new(top).style(theme.top_bar), rows[0]);
+
+        let index_lines = catalog
+            .sections
+            .iter()
+            .enumerate()
+            .map(|(idx, sec)| {
+                let selected = idx == self.ui.help.section_idx;
+                let prefix = if selected { "› " } else { "  " };
+                let style = if selected && self.ui.help.index_focus {
+                    theme.pane_focus.add_modifier(Modifier::BOLD)
+                } else if selected {
+                    theme.heading
+                } else {
+                    theme.help
+                };
+                Line::from(Span::styled(format!("{prefix}{}", sec.title), style))
+            })
+            .collect::<Vec<_>>();
+
+        let index = Paragraph::new(index_lines).block(
+            Block::default()
+                .title("Sections")
+                .borders(Borders::RIGHT)
+                .border_style(theme.pane_border),
+        );
+        frame.render_widget(index, body[0]);
+
+        let content_visible = lines
+            .into_iter()
+            .skip(self.ui.help.scroll)
+            .take(self.help_page_lines.max(1))
+            .collect::<Vec<_>>();
+        let content = Paragraph::new(content_visible).style(theme.help).wrap(Wrap { trim: false });
+        frame.render_widget(content, body[1]);
+
+        let hint = if self.ui.help.is_onboarding() {
+            "Esc close | Up/Down step | Enter next | Tab/Left/Right focus"
+        } else {
+            "Esc close | Enter open | Tab/Left/Right focus | PgUp/PgDn/Home/End/j/k scroll"
+        };
+        frame.render_widget(Paragraph::new(hint).style(theme.help), rows[2]);
+    }
+
     fn draw(&mut self, frame: &mut Frame<'_>) {
         let area = frame.area();
         self.term_width = area.width.max(1);
@@ -1818,19 +2130,11 @@ impl App {
             vertical[2],
         );
 
-        if self.ui.help_open {
-            let popup = centered_popup(76, 13, area);
-            frame.render_widget(Clear, popup);
-            let help_widget = Paragraph::new(help::help_text()).style(theme.help).block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title("Settings")
-                    .border_style(theme.pane_focus),
-            );
-            frame.render_widget(help_widget, popup);
+        if self.ui.help.open {
+            self.draw_docs_modal(frame, area, &theme);
         }
 
-        if !self.ui.help_open {
+        if !self.ui.help.open {
             if self.home_mode {
                 let popup = centered_popup(72, 12, vertical[1]);
                 if popup.width > 10 && popup.height > 7 {
@@ -1869,7 +2173,7 @@ impl App {
             Line::from(Span::styled("Open Markdown File", theme.heading)),
             Line::from(format!("Path: {}", self.home_query)),
             Line::from(""),
-            Line::from("Enter open | Cmd+,/Ctrl+, settings | Ctrl+Q quit"),
+            Line::from("Enter open | Cmd+,/Ctrl+, docs | Ctrl+Q quit"),
             Line::from("Tip: Use --focus view to start in preview mode"),
         ];
         let home = Paragraph::new(lines).block(
@@ -1920,14 +2224,14 @@ impl App {
             "search: Enter apply"
         } else if self.goto_mode {
             "goto: Enter apply"
+        } else if self.ui.help.open {
+            "Esc close docs"
         } else if self.home_mode {
             "home: type path + Enter"
-        } else if self.ui.help_open {
-            "Esc close settings"
         } else if self.ui.focus == PaneFocus::Editor && !self.readonly && !self.stream_mode {
             "Tab indent | Shift+Arrows select | Cmd/Alt+Backspace word | Shift+Tab mode"
         } else {
-            "Shift+Tab mode | Cmd+,/Ctrl+, settings"
+            "Shift+Tab mode | Cmd+,/Ctrl+, docs"
         };
 
         if let Some(conflict) = self.editor.conflict()
@@ -2093,6 +2397,48 @@ fn centered_popup(width_percent: u16, height: u16, area: Rect) -> Rect {
         width: popup_width.max(10),
         height: popup_height.max(3),
     }
+}
+
+fn docs_modal_rect(area: Rect) -> Rect {
+    let max_w = area.width.saturating_sub(4);
+    let width = if max_w >= 80 {
+        area.width.saturating_mul(92).div_ceil(100).clamp(80, max_w)
+    } else {
+        area.width.saturating_sub(2).max(1)
+    };
+    let max_h = area.height.saturating_sub(4);
+    let height = if max_h >= 20 {
+        area.height.saturating_mul(80).div_ceil(100).clamp(20, max_h)
+    } else {
+        area.height.saturating_sub(2).max(1)
+    };
+    Rect {
+        x: area.x + area.width.saturating_sub(width) / 2,
+        y: area.y + area.height.saturating_sub(height) / 2,
+        width,
+        height,
+    }
+}
+
+fn onboarding_marker_state() -> (Option<PathBuf>, bool) {
+    let path = onboarding_marker_path();
+    let seen = path.as_ref().is_some_and(|p| p.exists());
+    (path, seen)
+}
+
+fn onboarding_marker_path() -> Option<PathBuf> {
+    if let Some(root) = std::env::var_os("MDV_INSTALL_ROOT")
+        && !root.is_empty()
+    {
+        return Some(PathBuf::from(root).join("state").join("onboarding_seen"));
+    }
+    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))?;
+    Some(
+        PathBuf::from(home)
+            .join(".mdv")
+            .join("state")
+            .join("onboarding_seen"),
+    )
 }
 
 fn to_lines(text: &str) -> Vec<String> {
@@ -2285,10 +2631,11 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::ffi::OsString;
     use std::fs;
     use std::io;
     use std::path::PathBuf;
-    use std::sync::mpsc;
+    use std::sync::{Mutex, mpsc};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use crossterm::event::{
@@ -2305,10 +2652,12 @@ mod tests {
 
     use super::{
         App, InputEvent, PaneFocus, ThemeChoice, centered_popup, clamp_scroll, code_open_before,
-        cursor_rect, mode_label, next_pressed_key, next_terminal_input, pane_border_style,
-        preview_title, status_line, status_style, styled_editor_lines, styled_preview_line,
-        to_lines, toggle_raw_mode,
+        cursor_rect, docs_modal_rect, mode_label, next_pressed_key, next_terminal_input,
+        onboarding_marker_path, pane_border_style, preview_title, status_line, status_style,
+        styled_editor_lines, styled_preview_line, to_lines, toggle_raw_mode,
     };
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     fn temp_path(name: &str) -> PathBuf {
         let nanos = SystemTime::now()
@@ -2320,6 +2669,18 @@ mod tests {
 
     fn key(code: KeyCode, modifiers: KeyModifiers) -> KeyEvent {
         KeyEvent::new(code, modifiers)
+    }
+
+    fn set_env_var(key: &str, value: &str) {
+        unsafe { std::env::set_var(key, value) };
+    }
+
+    fn restore_env_var(key: &str, prev: Option<OsString>) {
+        if let Some(value) = prev {
+            unsafe { std::env::set_var(key, value) };
+        } else {
+            unsafe { std::env::remove_var(key) };
+        }
     }
 
     #[test]
@@ -3067,7 +3428,7 @@ mod tests {
 
         app.handle_key(key(KeyCode::Char(','), KeyModifiers::CONTROL), &mut running)
             .expect("open settings");
-        assert_eq!(app.status, "Settings opened");
+        assert_eq!(app.status, "Docs opened");
 
         app.handle_key(key(KeyCode::Char('z'), KeyModifiers::NONE), &mut running)
             .expect("type while settings open");
@@ -3091,11 +3452,53 @@ mod tests {
 
         app.handle_key(key(KeyCode::Char('/'), KeyModifiers::CONTROL), &mut running)
             .expect("ctrl slash");
-        assert!(!app.ui.help_open);
+        assert!(!app.ui.help.open);
 
         app.handle_key(key(KeyCode::Char(','), KeyModifiers::CONTROL), &mut running)
             .expect("ctrl comma");
-        assert!(app.ui.help_open);
+        assert!(app.ui.help.open);
+
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn docs_modal_navigation_keys_update_focus_section_and_scroll() {
+        let path = temp_path("docs-nav");
+        fs::write(&path, "x").expect("seed");
+        let mut app = App::new_file(path.clone(), false, false, false, "x".into()).expect("app");
+        let mut running = true;
+
+        app.handle_key(key(KeyCode::Char(','), KeyModifiers::CONTROL), &mut running)
+            .expect("open docs");
+        assert!(app.ui.help.open);
+        assert!(app.ui.help.index_focus);
+        assert_eq!(app.ui.help.section_idx, 0);
+
+        app.handle_key(key(KeyCode::Down, KeyModifiers::NONE), &mut running)
+            .expect("next section");
+        assert_eq!(app.ui.help.section_idx, 1);
+
+        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE), &mut running)
+            .expect("open section");
+        assert!(!app.ui.help.index_focus);
+        assert_eq!(app.ui.help.scroll, 0);
+
+        app.help_page_lines = 3;
+        app.handle_key(key(KeyCode::PageDown, KeyModifiers::NONE), &mut running)
+            .expect("page down");
+        assert!(app.ui.help.scroll > 0);
+        app.handle_key(key(KeyCode::Char('k'), KeyModifiers::NONE), &mut running)
+            .expect("k line up");
+        app.handle_key(key(KeyCode::Char('j'), KeyModifiers::NONE), &mut running)
+            .expect("j line down");
+
+        app.handle_key(key(KeyCode::Tab, KeyModifiers::NONE), &mut running)
+            .expect("tab focus");
+        assert!(app.ui.help.index_focus);
+
+        app.handle_key(key(KeyCode::Esc, KeyModifiers::NONE), &mut running)
+            .expect("close docs");
+        assert!(!app.ui.help.open);
 
         let _ = fs::remove_file(&path);
     }
@@ -3338,17 +3741,17 @@ mod tests {
         let mut app = App::new_file(path.clone(), false, false, false, "x".into()).expect("app");
         let mut running = true;
 
-        app.ui.help_open = true;
+        app.ui.help.open = true;
         app.handle_key(key(KeyCode::Esc, KeyModifiers::NONE), &mut running)
             .expect("esc");
-        assert!(!app.ui.help_open);
-        assert_eq!(app.status, "Settings closed");
+        assert!(!app.ui.help.open);
+        assert_eq!(app.status, "Docs closed");
         assert!(running);
 
-        app.ui.help_open = true;
+        app.ui.help.open = true;
         app.handle_key(key(KeyCode::Char('q'), KeyModifiers::CONTROL), &mut running)
             .expect("ctrl+q");
-        assert!(!app.ui.help_open);
+        assert!(!app.ui.help.open);
         assert!(!running);
 
         let _ = fs::remove_file(&path);
@@ -3385,6 +3788,103 @@ mod tests {
         app.handle_key(key(KeyCode::Char('q'), KeyModifiers::CONTROL), &mut running)
             .expect("ctrl+q");
         assert!(!running);
+    }
+
+    #[test]
+    fn onboarding_marker_path_prefers_install_root_then_home() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        let prior_root = std::env::var_os("MDV_INSTALL_ROOT");
+        let prior_home = std::env::var_os("HOME");
+
+        let install_root = std::env::temp_dir().join("mdv-install-root-path-test");
+        set_env_var(
+            "MDV_INSTALL_ROOT",
+            install_root.to_str().expect("install root utf8"),
+        );
+        set_env_var("HOME", "/tmp/mdv-home-path-test");
+        assert_eq!(
+            onboarding_marker_path().expect("path"),
+            install_root.join("state").join("onboarding_seen")
+        );
+
+        unsafe { std::env::remove_var("MDV_INSTALL_ROOT") };
+        assert_eq!(
+            onboarding_marker_path().expect("path"),
+            PathBuf::from("/tmp/mdv-home-path-test/.mdv/state/onboarding_seen")
+        );
+
+        restore_env_var("MDV_INSTALL_ROOT", prior_root);
+        restore_env_var("HOME", prior_home);
+    }
+
+    #[test]
+    fn onboarding_auto_opens_on_home_once_and_persists_marker() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        let prior_root = std::env::var_os("MDV_INSTALL_ROOT");
+        let install_root = std::env::temp_dir().join(format!(
+            "mdv-onboarding-state-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        set_env_var(
+            "MDV_INSTALL_ROOT",
+            install_root.to_str().expect("install root utf8"),
+        );
+
+        let marker = install_root.join("state").join("onboarding_seen");
+        if marker.exists() {
+            let _ = fs::remove_file(&marker);
+        }
+        if let Some(parent) = marker.parent() {
+            let _ = fs::remove_dir_all(parent);
+        }
+
+        let mut home = App::new_home_for_test(false, false, false);
+        home.interactive_input = true;
+        home.maybe_open_onboarding();
+        assert!(home.ui.help.open);
+        assert_eq!(home.ui.help.onboarding_step, Some(0));
+        home.close_docs_modal();
+        assert!(!home.ui.help.open);
+        assert!(marker.exists());
+
+        let mut home_again = App::new_home_for_test(false, false, false);
+        home_again.interactive_input = true;
+        home_again.maybe_open_onboarding();
+        assert!(!home_again.ui.help.open);
+
+        let mut file_app = App::new_stream_for_test(false);
+        file_app.interactive_input = true;
+        file_app.maybe_open_onboarding();
+        assert!(!file_app.ui.help.open);
+
+        let _ = fs::remove_dir_all(&install_root);
+        restore_env_var("MDV_INSTALL_ROOT", prior_root);
+    }
+
+    #[test]
+    fn onboarding_marker_write_failure_is_non_fatal() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        let prior_root = std::env::var_os("MDV_INSTALL_ROOT");
+        let root_file = temp_path("onboarding-root-file");
+        fs::write(&root_file, "x").expect("seed file");
+        set_env_var(
+            "MDV_INSTALL_ROOT",
+            root_file.to_str().expect("root file utf8"),
+        );
+
+        let mut home = App::new_home_for_test(false, false, false);
+        home.interactive_input = true;
+        home.maybe_open_onboarding();
+        assert!(home.ui.help.open);
+        home.close_docs_modal();
+        assert!(!home.ui.help.open);
+        assert!(!home.onboarding_seen);
+
+        let _ = fs::remove_file(&root_file);
+        restore_env_var("MDV_INSTALL_ROOT", prior_root);
     }
 
     #[test]
@@ -3938,7 +4438,7 @@ mod tests {
     fn helper_mode_and_status_branches() {
         let mut app = App::new_stream_for_test(false);
         assert_eq!(mode_label(&app), "stream");
-        assert_eq!(app.status_hint(), "Shift+Tab mode | Cmd+,/Ctrl+, settings");
+        assert_eq!(app.status_hint(), "Shift+Tab mode | Cmd+,/Ctrl+, docs");
 
         app.search_mode = true;
         assert_eq!(mode_label(&app), "search");
@@ -3960,10 +4460,10 @@ mod tests {
         assert_eq!(app.status_hint(), "replace: enter with | Ctrl+A all");
 
         app.replace_with_mode = false;
-        app.ui.help_open = true;
-        assert_eq!(app.status_hint(), "Esc close settings");
+        app.ui.help.open = true;
+        assert_eq!(app.status_hint(), "Esc close docs");
 
-        app.ui.help_open = false;
+        app.ui.help.open = false;
         app.stream_mode = false;
         app.readonly = false;
         assert!(app.status_hint().contains("Tab indent"));
@@ -4051,6 +4551,24 @@ mod tests {
         assert_eq!(popup.height, 20);
         assert!(popup.x >= 1);
         assert!(popup.y >= 2);
+
+        let docs_popup = docs_modal_rect(ratatui::layout::Rect {
+            x: 0,
+            y: 0,
+            width: 120,
+            height: 40,
+        });
+        assert_eq!(docs_popup.width, 111);
+        assert_eq!(docs_popup.height, 32);
+
+        let compact_docs = docs_modal_rect(ratatui::layout::Rect {
+            x: 0,
+            y: 0,
+            width: 50,
+            height: 12,
+        });
+        assert_eq!(compact_docs.width, 48);
+        assert_eq!(compact_docs.height, 10);
     }
 
     #[test]
@@ -4078,14 +4596,31 @@ mod tests {
     }
 
     #[test]
-    fn draw_renders_settings_popup_when_open() {
+    fn draw_renders_docs_modal_with_index_content_and_hint_bar() {
         let mut app = App::new_stream_for_test(false);
-        app.ui.help_open = true;
-        let backend = TestBackend::new(100, 30);
+        app.open_docs_modal();
+        let backend = TestBackend::new(120, 40);
         let mut terminal = Terminal::new(backend).expect("terminal");
         terminal.draw(|frame| app.draw(frame)).expect("draw");
-        let rendered = terminal.backend().buffer().content();
-        assert!(rendered.iter().any(|cell| cell.symbol() == "S"));
-        assert!(rendered.iter().any(|cell| cell.symbol() == "e"));
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(rendered.contains("Docs + Settings"));
+        assert!(rendered.contains("Sections"));
+        assert!(rendered.contains("Welcome"));
+        assert!(rendered.contains("Esc close"));
+    }
+
+    #[test]
+    fn draw_docs_modal_handles_compact_terminal() {
+        let mut app = App::new_stream_for_test(false);
+        app.open_docs_modal();
+        let backend = TestBackend::new(50, 12);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+        terminal.draw(|frame| app.draw(frame)).expect("draw");
     }
 }

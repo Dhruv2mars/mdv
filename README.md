@@ -39,16 +39,16 @@ tail -f notes.md | mdv --stream
 
 ## Keys
 
+In-app docs: `Cmd+,/Ctrl+,` (Docs + Settings modal).
+
+Quick ref:
 - `Ctrl+Q` quit
 - `Ctrl+S` save
 - `Ctrl+R` reload from disk
-- `Tab` toggle focused pane
-- `Ctrl+/` toggle help
-- `Alt+,` shrink editor pane
-- `Alt+.` grow editor pane
-- `Ctrl+W` reset split ratio
-- `Ctrl+K` keep local (on external change conflict)
-- `Ctrl+M` insert merge markers (on conflict)
+- `Shift+Tab` (or `Ctrl+T`) switch editor/view mode
+- `Ctrl+F` search, `Ctrl+H` replace, `Ctrl+G` goto line
+- `F3`/`Shift+F3` next/prev search result
+- Conflict flow: `Ctrl+J`/`Ctrl+U` hunk nav, `Ctrl+E` apply, `Ctrl+K` keep local, `Ctrl+M` merge
 
 ## Flags
 
@@ -58,7 +58,7 @@ tail -f notes.md | mdv --stream
 - `--perf` show perf info in status line
 - `--theme <auto|default|high-contrast>` set color theme
 - `--no-color` disable ANSI color
-- `--focus <editor|preview>` initial focused pane
+- `--focus <editor|view>` initial focused pane
 
 ## Installer Env
 

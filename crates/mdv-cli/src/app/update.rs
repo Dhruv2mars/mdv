@@ -9,7 +9,7 @@ pub fn apply_action(ui: &mut UiState, action: Action, _term_width: u16) {
                 PaneFocus::Preview => PaneFocus::Editor,
             };
         }
-        Action::ToggleHelp => ui.help_open = !ui.help_open,
+        Action::ToggleHelp => ui.help.open = !ui.help.open,
         Action::ApplyPrefs {
             focus,
             theme,
@@ -36,7 +36,7 @@ mod tests {
         assert_eq!(ui.focus, PaneFocus::Preview);
 
         apply_action(&mut ui, Action::ToggleHelp, 120);
-        assert!(ui.help_open);
+        assert!(ui.help.open);
     }
 
     #[test]
