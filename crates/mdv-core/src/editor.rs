@@ -84,6 +84,17 @@ impl EditorBuffer {
         self.dirty = true;
     }
 
+    pub fn insert_str(&mut self, s: &str) {
+        if s.is_empty() {
+            return;
+        }
+        self.push_undo_snapshot();
+        self.redo_stack.clear();
+        self.text.insert_str(self.cursor, s);
+        self.cursor += s.len();
+        self.dirty = true;
+    }
+
     pub fn insert_newline(&mut self) {
         self.insert_char('\n');
     }
@@ -97,6 +108,36 @@ impl EditorBuffer {
         let prev = self.prev_char_boundary(self.cursor);
         self.text.replace_range(prev..self.cursor, "");
         self.cursor = prev;
+        self.dirty = true;
+    }
+
+    pub fn delete_word_back(&mut self) {
+        if self.cursor == 0 {
+            return;
+        }
+        self.push_undo_snapshot();
+        self.redo_stack.clear();
+
+        let mut start = self.cursor;
+        while start > 0 {
+            let prev = self.prev_char_boundary(start);
+            let ch = self.text[prev..start].chars().next().expect("char");
+            if !ch.is_whitespace() {
+                break;
+            }
+            start = prev;
+        }
+        while start > 0 {
+            let prev = self.prev_char_boundary(start);
+            let ch = self.text[prev..start].chars().next().expect("char");
+            if ch.is_whitespace() {
+                break;
+            }
+            start = prev;
+        }
+
+        self.text.replace_range(start..self.cursor, "");
+        self.cursor = start;
         self.dirty = true;
     }
 
@@ -261,6 +302,28 @@ impl EditorBuffer {
         true
     }
 
+    pub fn set_cursor(&mut self, byte_index: usize) {
+        self.cursor = self.clamp_to_char_boundary(byte_index);
+    }
+
+    pub fn replace_range(&mut self, start: usize, end: usize, replacement: &str) -> bool {
+        let mut a = self.clamp_to_char_boundary(start);
+        let mut b = self.clamp_to_char_boundary(end);
+        if a > b {
+            std::mem::swap(&mut a, &mut b);
+        }
+        if a == b && replacement.is_empty() {
+            return false;
+        }
+
+        self.push_undo_snapshot();
+        self.redo_stack.clear();
+        self.text.replace_range(a..b, replacement);
+        self.cursor = a + replacement.len();
+        self.dirty = true;
+        true
+    }
+
     pub fn on_external_change(&mut self, external: String) {
         if self.dirty {
             self.conflict = Some(ConflictState {
@@ -394,6 +457,20 @@ impl EditorBuffer {
         idx
     }
 
+    fn clamp_to_char_boundary(&self, i: usize) -> usize {
+        if i >= self.text.len() {
+            return self.text.len();
+        }
+        if self.text.is_char_boundary(i) {
+            return i;
+        }
+        let mut idx = i;
+        while idx > 0 && !self.text.is_char_boundary(idx) {
+            idx -= 1;
+        }
+        idx
+    }
+
     fn snapshot(&self) -> HistoryState {
         HistoryState {
             text: self.text.clone(),
@@ -454,6 +531,40 @@ mod tests {
 
         buf.backspace();
         assert_eq!(buf.text(), "abc");
+    }
+
+    #[test]
+    fn insert_str_and_replace_range_work() {
+        let mut buf = EditorBuffer::new("abXYcd".into());
+        buf.set_cursor(2);
+        buf.insert_str("12");
+        assert_eq!(buf.text(), "ab12XYcd");
+        assert_eq!(buf.cursor(), 4);
+
+        assert!(buf.replace_range(4, 6, "zz"));
+        assert_eq!(buf.text(), "ab12zzcd");
+        assert_eq!(buf.cursor(), 6);
+
+        assert!(!buf.replace_range(3, 3, ""));
+    }
+
+    #[test]
+    fn delete_word_back_removes_prior_word_and_spaces() {
+        let mut buf = EditorBuffer::new("alpha beta  gamma".into());
+        buf.delete_word_back();
+        assert_eq!(buf.text(), "alpha beta  ");
+
+        buf.delete_word_back();
+        assert_eq!(buf.text(), "alpha ");
+    }
+
+    #[test]
+    fn set_cursor_clamps_to_char_boundary() {
+        let mut buf = EditorBuffer::new("éx".into());
+        buf.set_cursor(1);
+        assert_eq!(buf.cursor(), 0);
+        buf.set_cursor(99);
+        assert_eq!(buf.cursor(), buf.text().len());
     }
 
     #[test]

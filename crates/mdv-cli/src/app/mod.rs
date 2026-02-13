@@ -22,7 +22,7 @@ use crossterm::terminal::{
 use mdv_core::{EditorBuffer, SegmentKind, render_preview_lines, render_preview_segments};
 use ratatui::backend::{Backend, CrosstermBackend};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::Style;
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use ratatui::{Frame, Terminal};
@@ -73,6 +73,7 @@ pub struct App {
     replace_with_query: String,
     replace_target: String,
     home_query: String,
+    selection_anchor: Option<usize>,
     selected_conflict_hunk: usize,
     preview_cache: Option<PreviewCache>,
     ui: UiState,
@@ -150,6 +151,7 @@ impl App {
             replace_with_query: String::new(),
             replace_target: String::new(),
             home_query: String::new(),
+            selection_anchor: None,
             selected_conflict_hunk: 0,
             preview_cache: None,
             ui: UiState::default(),
@@ -201,6 +203,7 @@ impl App {
             replace_with_query: String::new(),
             replace_target: String::new(),
             home_query: String::new(),
+            selection_anchor: None,
             selected_conflict_hunk: 0,
             preview_cache: None,
             ui: UiState::default(),
@@ -257,6 +260,7 @@ impl App {
             replace_with_query: String::new(),
             replace_target: String::new(),
             home_query: String::new(),
+            selection_anchor: None,
             selected_conflict_hunk: 0,
             preview_cache: None,
             ui: UiState::default(),
@@ -302,6 +306,7 @@ impl App {
             replace_with_query: String::new(),
             replace_target: String::new(),
             home_query: String::new(),
+            selection_anchor: None,
             selected_conflict_hunk: 0,
             preview_cache: None,
             ui: UiState::default(),
@@ -514,6 +519,27 @@ impl App {
     }
 
     fn handle_key(&mut self, key: KeyEvent, running: &mut bool) -> Result<()> {
+        if key.code == KeyCode::Tab
+            && key.modifiers == KeyModifiers::NONE
+            && self.ui.focus == PaneFocus::Editor
+            && !self.home_mode
+            && !self.ui.help_open
+            && !self.search_mode
+            && !self.goto_mode
+            && !self.replace_find_mode
+            && !self.replace_with_mode
+            && !self.readonly
+        {
+            let _ = self.replace_selection("    ");
+            if self.selection_anchor.is_none() {
+                self.editor.insert_str("    ");
+                self.sync_conflict_hunk_selection();
+            }
+            self.status = "Tab inserted".into();
+            self.ensure_cursor_visible();
+            return Ok(());
+        }
+
         if let Some(action) = input::map_global_key(key) {
             update::apply_action(&mut self.ui, action, self.term_width);
             match action {
@@ -521,6 +547,7 @@ impl App {
                     if self.ui.focus == PaneFocus::Preview {
                         self.preview_scroll = self.editor_scroll;
                     }
+                    self.clear_selection();
                     self.status = match self.ui.focus {
                         PaneFocus::Editor => "Mode: editor".into(),
                         PaneFocus::Preview => "Mode: view".into(),
@@ -568,6 +595,29 @@ impl App {
                 (KeyCode::Esc, _) => {
                     self.home_query.clear();
                     self.status = "Home: query cleared".into();
+                }
+                (KeyCode::Backspace, mods)
+                    if mods.contains(KeyModifiers::SUPER)
+                        || mods.contains(KeyModifiers::ALT)
+                        || mods.contains(KeyModifiers::CONTROL) =>
+                {
+                    while self
+                        .home_query
+                        .chars()
+                        .next_back()
+                        .is_some_and(|c| c.is_whitespace())
+                    {
+                        self.home_query.pop();
+                    }
+                    while self
+                        .home_query
+                        .chars()
+                        .next_back()
+                        .is_some_and(|c| !c.is_whitespace())
+                    {
+                        self.home_query.pop();
+                    }
+                    self.status = format!("Home path: {}", self.home_query);
                 }
                 (KeyCode::Backspace, _) => {
                     self.home_query.pop();
@@ -801,6 +851,7 @@ impl App {
                 self.status = "Goto: ".into();
             }
             (KeyCode::Char('z'), KeyModifiers::CONTROL) => {
+                self.clear_selection();
                 if self.editor.undo() {
                     self.sync_conflict_hunk_selection();
                     self.status = "Undo".into();
@@ -809,6 +860,7 @@ impl App {
                 }
             }
             (KeyCode::Char('y'), KeyModifiers::CONTROL) => {
+                self.clear_selection();
                 if self.editor.redo() {
                     self.sync_conflict_hunk_selection();
                     self.status = "Redo".into();
@@ -831,10 +883,58 @@ impl App {
             (KeyCode::Char('e'), KeyModifiers::CONTROL) => {
                 self.apply_selected_conflict_hunk();
             }
-            (KeyCode::Left, _) => self.editor.move_left(),
-            (KeyCode::Right, _) => self.editor.move_right(),
-            (KeyCode::Up, _) => self.editor.move_up(),
-            (KeyCode::Down, _) => self.editor.move_down(),
+            (KeyCode::Left, KeyModifiers::SHIFT) => {
+                self.start_selection();
+                self.editor.move_left();
+                self.update_selection_after_move();
+            }
+            (KeyCode::Right, KeyModifiers::SHIFT) => {
+                self.start_selection();
+                self.editor.move_right();
+                self.update_selection_after_move();
+            }
+            (KeyCode::Up, KeyModifiers::SHIFT) => {
+                self.start_selection();
+                self.editor.move_up();
+                self.update_selection_after_move();
+            }
+            (KeyCode::Down, KeyModifiers::SHIFT) => {
+                self.start_selection();
+                self.editor.move_down();
+                self.update_selection_after_move();
+            }
+            (KeyCode::Left, _) => {
+                if let Some((start, _)) = self.selection_range() {
+                    self.editor.set_cursor(start);
+                    self.clear_selection();
+                } else {
+                    self.editor.move_left();
+                }
+            }
+            (KeyCode::Right, _) => {
+                if let Some((_, end)) = self.selection_range() {
+                    self.editor.set_cursor(end);
+                    self.clear_selection();
+                } else {
+                    self.editor.move_right();
+                }
+            }
+            (KeyCode::Up, _) => {
+                if let Some((start, _)) = self.selection_range() {
+                    self.editor.set_cursor(start);
+                    self.clear_selection();
+                } else {
+                    self.editor.move_up();
+                }
+            }
+            (KeyCode::Down, _) => {
+                if let Some((_, end)) = self.selection_range() {
+                    self.editor.set_cursor(end);
+                    self.clear_selection();
+                } else {
+                    self.editor.move_down();
+                }
+            }
             (KeyCode::PageUp, _) => {
                 if self.ui.focus == PaneFocus::Editor {
                     self.editor_scroll =
@@ -854,19 +954,37 @@ impl App {
             }
             (KeyCode::Enter, _) => {
                 if !self.readonly {
-                    self.editor.insert_newline();
+                    if !self.replace_selection("\n") {
+                        self.editor.insert_newline();
+                    }
+                    self.sync_conflict_hunk_selection();
+                }
+            }
+            (KeyCode::Backspace, mods)
+                if mods.contains(KeyModifiers::SUPER)
+                    || mods.contains(KeyModifiers::ALT)
+                    || mods.contains(KeyModifiers::CONTROL) =>
+            {
+                if !self.readonly {
+                    if !self.replace_selection("") {
+                        self.editor.delete_word_back();
+                    }
                     self.sync_conflict_hunk_selection();
                 }
             }
             (KeyCode::Backspace, _) => {
                 if !self.readonly {
-                    self.editor.backspace();
+                    if !self.replace_selection("") {
+                        self.editor.backspace();
+                    }
                     self.sync_conflict_hunk_selection();
                 }
             }
             (KeyCode::Char(c), KeyModifiers::NONE | KeyModifiers::SHIFT) => {
                 if !self.readonly {
-                    self.editor.insert_char(c);
+                    if !self.replace_selection(&c.to_string()) {
+                        self.editor.insert_char(c);
+                    }
                     self.sync_conflict_hunk_selection();
                 }
             }
@@ -901,6 +1019,43 @@ impl App {
         }
     }
 
+    fn start_selection(&mut self) {
+        if self.selection_anchor.is_none() {
+            self.selection_anchor = Some(self.editor.cursor());
+        }
+    }
+
+    fn update_selection_after_move(&mut self) {
+        if self.selection_range().is_none() {
+            self.selection_anchor = None;
+        }
+    }
+
+    fn clear_selection(&mut self) {
+        self.selection_anchor = None;
+    }
+
+    fn selection_range(&self) -> Option<(usize, usize)> {
+        let anchor = self.selection_anchor?;
+        let cursor = self.editor.cursor();
+        if anchor == cursor {
+            None
+        } else if anchor < cursor {
+            Some((anchor, cursor))
+        } else {
+            Some((cursor, anchor))
+        }
+    }
+
+    fn replace_selection(&mut self, replacement: &str) -> bool {
+        let Some((start, end)) = self.selection_range() else {
+            return false;
+        };
+        let changed = self.editor.replace_range(start, end, replacement);
+        self.clear_selection();
+        changed
+    }
+
     fn open_home_path(&mut self, path: PathBuf) {
         let existed = path.exists();
         let text = match fs::read_to_string(&path) {
@@ -933,6 +1088,7 @@ impl App {
         self.editor = EditorBuffer::new(text);
         self.preview_cache = None;
         self.home_mode = false;
+        self.clear_selection();
         self.search_mode = false;
         self.goto_mode = false;
         self.clear_replace_mode();
@@ -1248,8 +1404,12 @@ impl App {
                 let editor_lines = to_lines(self.editor.text());
                 self.editor_scroll =
                     clamp_scroll(self.editor_scroll, editor_lines.len(), self.editor_height);
-                let editor_visible =
-                    slice_lines(&editor_lines, self.editor_scroll, self.editor_height);
+                let editor_visible = styled_editor_lines(
+                    self.editor.text(),
+                    self.editor_scroll,
+                    self.editor_height,
+                    self.selection_range(),
+                );
 
                 let editor_border = pane_border_style(&theme, self.ui.focus == PaneFocus::Editor);
                 let editor = Paragraph::new(editor_visible).block(
@@ -1430,8 +1590,10 @@ impl App {
             "home: type path + Enter"
         } else if self.ui.help_open {
             "Esc close settings"
+        } else if self.ui.focus == PaneFocus::Editor && !self.readonly && !self.stream_mode {
+            "Tab indent | Shift+Arrows select | Cmd/Alt+Backspace word | Ctrl+T mode"
         } else {
-            "Tab mode | Ctrl+/ settings"
+            "Ctrl+T mode | Ctrl+/ settings"
         };
 
         if let Some(conflict) = self.editor.conflict()
@@ -1611,14 +1773,59 @@ fn clamp_scroll(scroll: usize, total: usize, height: usize) -> usize {
     }
 }
 
-fn slice_lines(lines: &[String], scroll: usize, height: usize) -> String {
+fn styled_editor_lines(
+    text: &str,
+    scroll: usize,
+    height: usize,
+    selection: Option<(usize, usize)>,
+) -> Vec<Line<'static>> {
+    let lines = to_lines(text);
+    let mut line_starts = Vec::with_capacity(lines.len());
+    let mut idx = 0usize;
+    for (i, line) in lines.iter().enumerate() {
+        line_starts.push(idx);
+        idx += line.len();
+        if i + 1 < lines.len() {
+            idx += 1;
+        }
+    }
+
+    let selected_style = Style::default().add_modifier(Modifier::REVERSED);
     lines
         .iter()
+        .enumerate()
         .skip(scroll)
         .take(height)
-        .map(String::as_str)
-        .collect::<Vec<_>>()
-        .join("\n")
+        .map(|(line_idx, line)| {
+            let Some((sel_start, sel_end)) = selection else {
+                return Line::from(Span::raw(line.clone()));
+            };
+            let line_start = line_starts[line_idx];
+            let line_end = line_start + line.len();
+            if sel_end <= line_start || sel_start >= line_end {
+                return Line::from(Span::raw(line.clone()));
+            }
+
+            let mut spans = Vec::new();
+            let local_start = sel_start.saturating_sub(line_start).min(line.len());
+            let local_end = sel_end.saturating_sub(line_start).min(line.len());
+
+            if local_start > 0 {
+                spans.push(Span::raw(line[..local_start].to_string()));
+            }
+            if local_end > local_start {
+                spans.push(Span::styled(
+                    line[local_start..local_end].to_string(),
+                    selected_style,
+                ));
+            }
+            if local_end < line.len() {
+                spans.push(Span::raw(line[local_end..].to_string()));
+            }
+
+            Line::from(spans)
+        })
+        .collect()
 }
 
 fn cursor_rect(area: Rect) -> Rect {
@@ -1695,8 +1902,7 @@ mod tests {
     use super::{
         App, InputEvent, PaneFocus, ThemeChoice, centered_popup, clamp_scroll, code_open_before,
         cursor_rect, mode_label, next_pressed_key, next_terminal_input, pane_border_style,
-        preview_title, slice_lines, status_line, status_style, styled_preview_line, to_lines,
-        toggle_raw_mode,
+        preview_title, status_line, status_style, styled_preview_line, to_lines, toggle_raw_mode,
     };
 
     fn temp_path(name: &str) -> PathBuf {
@@ -1716,12 +1922,6 @@ mod tests {
         assert_eq!(clamp_scroll(0, 3, 5), 0);
         assert_eq!(clamp_scroll(1, 10, 4), 1);
         assert_eq!(clamp_scroll(20, 10, 4), 6);
-    }
-
-    #[test]
-    fn slice_lines_respects_window() {
-        let lines = vec!["a".into(), "b".into(), "c".into(), "d".into()];
-        assert_eq!(slice_lines(&lines, 1, 2), "b\nc");
     }
 
     #[test]
@@ -2376,13 +2576,77 @@ mod tests {
         let path = temp_path("mode-toggle");
         fs::write(&path, "x").expect("seed");
         let mut app = App::new_file(path.clone(), false, false, false, "x".into()).expect("app");
+        app.set_initial_focus(PaneFocus::Preview);
         let mut running = true;
 
         app.handle_key(key(KeyCode::Tab, KeyModifiers::NONE), &mut running)
             .expect("tab");
 
-        assert_eq!(app.status, "Mode: view");
+        assert_eq!(app.status, "Mode: editor");
 
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn ctrl_t_switches_mode_from_editor() {
+        let path = temp_path("mode-toggle-ctrlt");
+        fs::write(&path, "x").expect("seed");
+        let mut app = App::new_file(path.clone(), false, false, false, "x".into()).expect("app");
+        let mut running = true;
+
+        app.handle_key(key(KeyCode::Char('t'), KeyModifiers::CONTROL), &mut running)
+            .expect("ctrl+t");
+
+        assert_eq!(app.status, "Mode: view");
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn tab_inserts_spaces_in_editor_mode() {
+        let path = temp_path("tab-insert");
+        fs::write(&path, "x").expect("seed");
+        let mut app = App::new_file(path.clone(), false, false, false, "x".into()).expect("app");
+        let mut running = true;
+
+        app.handle_key(key(KeyCode::Tab, KeyModifiers::NONE), &mut running)
+            .expect("tab insert");
+
+        assert_eq!(app.editor.text(), "x    ");
+        assert_eq!(app.status, "Tab inserted");
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn shift_arrow_selects_and_typing_replaces_selection() {
+        let path = temp_path("shift-select");
+        fs::write(&path, "hello").expect("seed");
+        let mut app =
+            App::new_file(path.clone(), false, false, false, "hello".into()).expect("app");
+        let mut running = true;
+
+        app.handle_key(key(KeyCode::Left, KeyModifiers::SHIFT), &mut running)
+            .expect("shift left");
+        app.handle_key(key(KeyCode::Left, KeyModifiers::SHIFT), &mut running)
+            .expect("shift left");
+        app.handle_key(key(KeyCode::Char('X'), KeyModifiers::SHIFT), &mut running)
+            .expect("replace selection");
+
+        assert_eq!(app.editor.text(), "helX");
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn word_delete_shortcut_removes_previous_word() {
+        let path = temp_path("word-delete");
+        fs::write(&path, "alpha beta").expect("seed");
+        let mut app =
+            App::new_file(path.clone(), false, false, false, "alpha beta".into()).expect("app");
+        let mut running = true;
+
+        app.handle_key(key(KeyCode::Backspace, KeyModifiers::ALT), &mut running)
+            .expect("alt backspace");
+
+        assert_eq!(app.editor.text(), "alpha ");
         let _ = fs::remove_file(&path);
     }
 
@@ -2419,10 +2683,8 @@ mod tests {
             .join("\n");
         fs::write(&path, &text).expect("seed");
         let mut app = App::new_file(path.clone(), false, false, false, text).expect("app");
+        app.set_initial_focus(PaneFocus::Preview);
         let mut running = true;
-
-        app.handle_key(key(KeyCode::Tab, KeyModifiers::NONE), &mut running)
-            .expect("to view");
         let cursor_before = app.editor.line_col_at_cursor().0;
 
         app.handle_key(key(KeyCode::PageDown, KeyModifiers::NONE), &mut running)
@@ -2443,10 +2705,7 @@ mod tests {
             .join("\n");
         fs::write(&path, &text).expect("seed");
         let mut app = App::new_file(path.clone(), false, false, false, text).expect("app");
-        let mut running = true;
-
-        app.handle_key(key(KeyCode::Tab, KeyModifiers::NONE), &mut running)
-            .expect("to view");
+        app.set_initial_focus(PaneFocus::Preview);
         let cursor_before = app.editor.line_col_at_cursor().0;
         app.preview_height = 12;
 
@@ -2826,7 +3085,7 @@ mod tests {
     fn helper_mode_and_status_branches() {
         let mut app = App::new_stream_for_test(false);
         assert_eq!(mode_label(&app), "stream");
-        assert_eq!(app.status_hint(), "Tab mode | Ctrl+/ settings");
+        assert_eq!(app.status_hint(), "Ctrl+T mode | Ctrl+/ settings");
 
         app.search_mode = true;
         assert_eq!(mode_label(&app), "search");
@@ -2845,6 +3104,11 @@ mod tests {
         app.replace_find_mode = false;
         app.ui.help_open = true;
         assert_eq!(app.status_hint(), "Esc close settings");
+
+        app.ui.help_open = false;
+        app.stream_mode = false;
+        app.readonly = false;
+        assert!(app.status_hint().contains("Tab indent"));
     }
 
     #[test]
