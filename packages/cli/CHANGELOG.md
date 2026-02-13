@@ -1,5 +1,11 @@
 # @dhruv2mars/mdv
 
+## 0.0.20
+
+### Patch Changes
+
+- Release UX/input fixes: settings shortcut remap, Shift+Tab mode toggle, editor semantic coloring parity, expanded keyboard editing actions, and mouse click/drag selection with pane-aware scroll.
+
 ## 0.0.19
 
 ### Patch Changes
