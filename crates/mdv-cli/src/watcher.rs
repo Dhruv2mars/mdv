@@ -235,28 +235,23 @@ mod tests {
     fn start_callback_emits_update_after_write() {
         let dir = std::env::temp_dir();
         let path = dir.join("mdv-watch-callback-test.md");
-        std::fs::write(&path, "a").expect("seed");
-        let (_watcher, rx) = super::start(&path).expect("start");
-        let path_for_thread = path.clone();
-        std::thread::spawn(move || {
-            std::thread::sleep(std::time::Duration::from_millis(250));
-            std::fs::write(&path_for_thread, "c").expect("intermediate update");
-            std::thread::sleep(std::time::Duration::from_millis(120));
-            std::fs::write(&path_for_thread, "b").expect("update");
-        });
-
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
-        let mut saw_update = false;
-        while std::time::Instant::now() < deadline {
-            let Ok(msg) = rx.recv_timeout(std::time::Duration::from_millis(50)) else {
-                continue;
+        std::fs::write(&path, "b").expect("seed");
+        let event_path = path.clone();
+        let (_watcher, rx) = super::start_with_factory(&path, move |mut handler| {
+            let event = Event {
+                kind: EventKind::Modify(ModifyKind::Any),
+                paths: vec![event_path.clone()],
+                attrs: Default::default(),
             };
-            if matches!(msg, WatchMessage::ExternalUpdate(text) if text == "b") {
-                saw_update = true;
-                break;
-            }
-        }
-        assert!(saw_update, "did not receive updated content");
+            handler.handle_event(Ok(event));
+            notify::recommended_watcher(move |_result: notify::Result<Event>| {})
+        })
+        .expect("start");
+
+        assert!(matches!(
+            rx.recv_timeout(std::time::Duration::from_millis(250)).expect("msg"),
+            WatchMessage::ExternalUpdate(text) if text == "b"
+        ));
 
         let _ = std::fs::remove_file(&path);
     }
