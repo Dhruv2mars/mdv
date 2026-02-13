@@ -404,15 +404,16 @@ fn classify_lines(lines: Vec<String>) -> Vec<PreviewLine> {
             continue;
         }
         if let Some(rest) = trimmed.strip_prefix("- ") {
-            let mut segments = Vec::new();
-            segments.push(PreviewSegment {
-                text: "- ".to_string(),
-                kind: SegmentKind::ListBullet,
-            });
-            segments.push(PreviewSegment {
-                text: rest.to_string(),
-                kind: SegmentKind::Plain,
-            });
+            let segments = vec![
+                PreviewSegment {
+                    text: "- ".to_string(),
+                    kind: SegmentKind::ListBullet,
+                },
+                PreviewSegment {
+                    text: rest.to_string(),
+                    kind: SegmentKind::Plain,
+                },
+            ];
             out.push(PreviewLine { segments });
             continue;
         }
@@ -420,15 +421,16 @@ fn classify_lines(lines: Vec<String>) -> Vec<PreviewLine> {
             && idx > 0
             && trimmed[idx..].starts_with(". ")
         {
-            let mut segments = Vec::new();
-            segments.push(PreviewSegment {
-                text: trimmed[..idx + 2].to_string(),
-                kind: SegmentKind::ListBullet,
-            });
-            segments.push(PreviewSegment {
-                text: trimmed[idx + 2..].to_string(),
-                kind: SegmentKind::Plain,
-            });
+            let segments = vec![
+                PreviewSegment {
+                    text: trimmed[..idx + 2].to_string(),
+                    kind: SegmentKind::ListBullet,
+                },
+                PreviewSegment {
+                    text: trimmed[idx + 2..].to_string(),
+                    kind: SegmentKind::Plain,
+                },
+            ];
             out.push(PreviewLine { segments });
             continue;
         }

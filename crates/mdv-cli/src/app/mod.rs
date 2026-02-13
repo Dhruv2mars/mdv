@@ -1177,14 +1177,14 @@ impl App {
             "Tab focus | Ctrl+/ help"
         };
 
-        if let Some(conflict) = self.editor.conflict() {
-            if !conflict.hunks.is_empty() {
-                return format!(
-                    "{base} | hunk {}/{}",
-                    self.selected_conflict_hunk + 1,
-                    conflict.hunks.len()
-                );
-            }
+        if let Some(conflict) = self.editor.conflict()
+            && !conflict.hunks.is_empty()
+        {
+            return format!(
+                "{base} | hunk {}/{}",
+                self.selected_conflict_hunk + 1,
+                conflict.hunks.len()
+            );
         }
         base.into()
     }
@@ -1411,11 +1411,13 @@ mod tests {
     use ratatui::backend::TestBackend;
 
     use crate::stream::StreamMessage;
+    use crate::ui::theme::build_theme;
     use crate::watcher::WatchMessage;
 
     use super::{
-        App, clamp_scroll, cursor_rect, next_pressed_key, slice_lines, status_line, to_lines,
-        toggle_raw_mode,
+        App, PaneFocus, ThemeChoice, centered_popup, clamp_scroll, code_open_before, cursor_rect,
+        mode_label, next_pressed_key, pane_border_style, preview_title, slice_lines, status_line,
+        status_style, styled_preview_line, to_lines, toggle_raw_mode,
     };
 
     fn temp_path(name: &str) -> PathBuf {
@@ -2370,5 +2372,125 @@ mod tests {
         let (second, _) = app.preview_lines_cached(40);
         assert!(std::sync::Arc::ptr_eq(&first, &second));
         let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn app_setters_apply_ui_prefs() {
+        let mut app = App::new_stream_for_test(false);
+        app.set_theme(ThemeChoice::HighContrast);
+        app.set_no_color(true);
+        app.set_initial_focus(PaneFocus::Preview);
+        assert_eq!(app.ui.theme, ThemeChoice::HighContrast);
+        assert!(app.ui.no_color);
+        assert_eq!(app.ui.focus, PaneFocus::Preview);
+    }
+
+    #[test]
+    fn helper_mode_and_status_branches() {
+        let mut app = App::new_stream_for_test(false);
+        assert_eq!(mode_label(&app), "stream");
+        assert_eq!(app.status_hint(), "Tab focus | Ctrl+/ help");
+
+        app.search_mode = true;
+        assert_eq!(mode_label(&app), "search");
+        assert_eq!(app.status_hint(), "search: Enter apply");
+
+        app.search_mode = false;
+        app.goto_mode = true;
+        assert_eq!(mode_label(&app), "goto");
+        assert_eq!(app.status_hint(), "goto: Enter apply");
+
+        app.goto_mode = false;
+        app.replace_find_mode = true;
+        assert_eq!(mode_label(&app), "replace");
+        assert_eq!(app.status_hint(), "replace: enter find");
+
+        app.replace_find_mode = false;
+        app.ui.help_open = true;
+        assert_eq!(app.status_hint(), "Ctrl+/ close help");
+    }
+
+    #[test]
+    fn helper_info_line_title_and_styles() {
+        let path = temp_path("helpers");
+        fs::write(&path, "a\nb").expect("seed");
+        let mut app = App::new_file(path.clone(), false, false, false, "a\nb".into()).expect("app");
+        app.editor.insert_char('!');
+        app.editor.on_external_change("a\nB\nc".into());
+
+        let info = app.info_line(140);
+        assert!(info.contains("mode=conflict"));
+        assert!(info.contains("focus=editor"));
+
+        let title = preview_title(0, app.editor.conflict());
+        assert!(title.contains("Preview [conflict 1/"));
+        assert_eq!(preview_title(0, None), "Preview");
+
+        let theme = build_theme(ThemeChoice::Default, false);
+        assert_eq!(pane_border_style(&theme, true).fg, theme.pane_focus.fg);
+        assert_eq!(pane_border_style(&theme, false).fg, theme.pane_border.fg);
+        assert_eq!(
+            status_style(&theme, false, "watch error: x").fg,
+            theme.status_error.fg
+        );
+        assert_eq!(status_style(&theme, true, "ok").fg, theme.status_warn.fg);
+        assert_eq!(status_style(&theme, false, "ok").fg, theme.status_ok.fg);
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn helper_preview_line_code_and_list_paths() {
+        let theme = build_theme(ThemeChoice::Default, false);
+        let mut in_code = false;
+
+        let fence = styled_preview_line("```rs", 80, &theme, &mut in_code);
+        assert!(in_code);
+        assert_eq!(fence.spans[0].content, "```rs");
+
+        let code = styled_preview_line("let x = 1;", 80, &theme, &mut in_code);
+        assert_eq!(code.spans[0].content, "let x = 1;");
+
+        let close = styled_preview_line("```", 80, &theme, &mut in_code);
+        assert!(!in_code);
+        assert_eq!(close.spans[0].content, "```");
+
+        let bullet = styled_preview_line("- item", 80, &theme, &mut in_code);
+        assert_eq!(bullet.spans[0].content, "- ");
+        assert_eq!(bullet.spans[1].content, "item");
+
+        let ordered = styled_preview_line("12. item", 80, &theme, &mut in_code);
+        assert_eq!(ordered.spans[0].content, "12. ");
+        assert_eq!(ordered.spans[1].content, "item");
+
+        let malformed = styled_preview_line("xx. item", 80, &theme, &mut in_code);
+        assert_eq!(malformed.spans[0].content, "xx. item");
+    }
+
+    #[test]
+    fn helper_code_open_and_popup() {
+        let lines = vec![
+            "a".to_string(),
+            "```".to_string(),
+            "code".to_string(),
+            "```".to_string(),
+        ];
+        assert!(!code_open_before(&lines, 1));
+        assert!(code_open_before(&lines, 3));
+        assert!(!code_open_before(&lines, 4));
+
+        let popup = centered_popup(
+            60,
+            40,
+            ratatui::layout::Rect {
+                x: 1,
+                y: 2,
+                width: 100,
+                height: 20,
+            },
+        );
+        assert_eq!(popup.width, 60);
+        assert_eq!(popup.height, 20);
+        assert!(popup.x >= 1);
+        assert!(popup.y >= 2);
     }
 }
