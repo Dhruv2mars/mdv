@@ -1,5 +1,6 @@
 mod app;
 mod stream;
+mod ui;
 mod watcher;
 
 use std::fs;
@@ -7,7 +8,7 @@ use std::io::{self, IsTerminal, Read, Write};
 use std::path::PathBuf;
 
 use anyhow::{Result, bail};
-use clap::{CommandFactory, Parser};
+use clap::{CommandFactory, Parser, ValueEnum};
 use mdv_core::render_preview_lines;
 
 #[derive(Debug, Parser)]
@@ -31,6 +32,31 @@ struct Cli {
     /// Show perf info in status line
     #[arg(long, default_value_t = false)]
     perf: bool,
+
+    /// Color theme
+    #[arg(long, value_enum, default_value_t = CliTheme::Auto)]
+    theme: CliTheme,
+
+    /// Disable ANSI color
+    #[arg(long, default_value_t = false)]
+    no_color: bool,
+
+    /// Initial pane focus
+    #[arg(long, value_enum, default_value_t = CliFocus::Editor)]
+    focus: CliFocus,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq)]
+enum CliTheme {
+    Auto,
+    Default,
+    HighContrast,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq)]
+enum CliFocus {
+    Editor,
+    Preview,
 }
 
 fn main() -> Result<()> {
@@ -50,6 +76,7 @@ fn main() -> Result<()> {
         }
 
         let mut app = app::App::new_stream(cli.perf)?;
+        apply_ui_flags(&mut app, cli.theme, cli.no_color, cli.focus);
         return app.run();
     }
 
@@ -67,7 +94,23 @@ fn main() -> Result<()> {
     }
 
     let mut app = app::App::new_file(path, cli.readonly, !cli.no_watch, cli.perf, text)?;
+    apply_ui_flags(&mut app, cli.theme, cli.no_color, cli.focus);
     app.run()
+}
+
+fn apply_ui_flags(app: &mut app::App, theme: CliTheme, no_color: bool, focus: CliFocus) {
+    let theme = match theme {
+        CliTheme::Auto => app::ThemeChoice::Auto,
+        CliTheme::Default => app::ThemeChoice::Default,
+        CliTheme::HighContrast => app::ThemeChoice::HighContrast,
+    };
+    let focus = match focus {
+        CliFocus::Editor => app::PaneFocus::Editor,
+        CliFocus::Preview => app::PaneFocus::Preview,
+    };
+    app.set_theme(theme);
+    app.set_no_color(no_color);
+    app.set_initial_focus(focus);
 }
 
 fn print_preview(text: &str) -> io::Result<()> {

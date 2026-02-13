@@ -1,5 +1,29 @@
 use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SegmentKind {
+    Plain,
+    Heading,
+    ListBullet,
+    Link,
+    Code,
+    Quote,
+    TableHeader,
+    ConflictLocal,
+    ConflictExternal,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreviewSegment {
+    pub text: String,
+    pub kind: SegmentKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreviewLine {
+    pub segments: Vec<PreviewSegment>,
+}
+
 #[derive(Debug, Clone)]
 struct ListState {
     ordered: bool,
@@ -299,6 +323,11 @@ pub fn render_preview_lines(markdown: &str, width: u16) -> Vec<String> {
     renderer.lines
 }
 
+pub fn render_preview_segments(markdown: &str, width: u16) -> Vec<PreviewLine> {
+    let lines = render_preview_lines(markdown, width);
+    classify_lines(lines)
+}
+
 fn heading_prefix(level: HeadingLevel) -> &'static str {
     match level {
         HeadingLevel::H1 => "# ",
@@ -333,9 +362,106 @@ fn wrap_line(input: &str, width: usize) -> Vec<String> {
     chunks
 }
 
+fn classify_lines(lines: Vec<String>) -> Vec<PreviewLine> {
+    let mut out = Vec::with_capacity(lines.len());
+    let mut in_code_block = false;
+    let mut pending_table_header = false;
+
+    for line in lines {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("```") || trimmed == "$$" {
+            in_code_block = !in_code_block;
+            out.push(single(line, SegmentKind::Code));
+            continue;
+        }
+
+        if in_code_block {
+            out.push(single(line, SegmentKind::Code));
+            continue;
+        }
+
+        if trimmed.starts_with("| ") && trimmed.ends_with(" |") {
+            if pending_table_header {
+                out.push(single(line, SegmentKind::TableHeader));
+                pending_table_header = false;
+            } else if is_table_separator(trimmed) {
+                out.push(single(line, SegmentKind::Plain));
+            } else {
+                out.push(single(line, SegmentKind::Plain));
+                pending_table_header = true;
+            }
+            continue;
+        } else {
+            pending_table_header = false;
+        }
+
+        if trimmed.starts_with("# ") || trimmed.starts_with("## ") || trimmed.starts_with("### ") {
+            out.push(single(line, SegmentKind::Heading));
+            continue;
+        }
+        if trimmed.starts_with("> ") {
+            out.push(single(line, SegmentKind::Quote));
+            continue;
+        }
+        if let Some(rest) = trimmed.strip_prefix("- ") {
+            let mut segments = Vec::new();
+            segments.push(PreviewSegment {
+                text: "- ".to_string(),
+                kind: SegmentKind::ListBullet,
+            });
+            segments.push(PreviewSegment {
+                text: rest.to_string(),
+                kind: SegmentKind::Plain,
+            });
+            out.push(PreviewLine { segments });
+            continue;
+        }
+        if let Some((idx, _)) = trimmed.char_indices().find(|(_, c)| !c.is_ascii_digit())
+            && idx > 0
+            && trimmed[idx..].starts_with(". ")
+        {
+            let mut segments = Vec::new();
+            segments.push(PreviewSegment {
+                text: trimmed[..idx + 2].to_string(),
+                kind: SegmentKind::ListBullet,
+            });
+            segments.push(PreviewSegment {
+                text: trimmed[idx + 2..].to_string(),
+                kind: SegmentKind::Plain,
+            });
+            out.push(PreviewLine { segments });
+            continue;
+        }
+        if trimmed.contains("](") && trimmed.contains('[') && trimmed.ends_with(')') {
+            out.push(single(line, SegmentKind::Link));
+            continue;
+        }
+
+        out.push(single(line, SegmentKind::Plain));
+    }
+
+    out
+}
+
+fn single(line: String, kind: SegmentKind) -> PreviewLine {
+    PreviewLine {
+        segments: vec![PreviewSegment { text: line, kind }],
+    }
+}
+
+fn is_table_separator(line: &str) -> bool {
+    let inner = line.trim_start_matches('|').trim_end_matches('|').trim();
+    if inner.is_empty() {
+        return false;
+    }
+    inner
+        .split('|')
+        .all(|cell| !cell.trim().is_empty() && cell.trim().chars().all(|c| c == '-' || c == ':'))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::render_preview_lines;
+    use super::{SegmentKind, render_preview_lines, render_preview_segments};
 
     #[test]
     fn renders_heading_and_list() {
@@ -461,5 +587,26 @@ mod tests {
         assert_eq!(lines[0], "$$");
         assert_eq!(lines[1], "a+b");
         assert_eq!(lines[2], "$$");
+    }
+
+    #[test]
+    fn renders_segment_kinds_for_heading_list_link_code_and_quote() {
+        let src = "# Title\n- item\n[site](https://x)\n```rs\nlet x = 1;\n```\n> q";
+        let lines = render_preview_segments(src, 80);
+        assert_eq!(lines[0].segments[0].kind, SegmentKind::Heading);
+        assert_eq!(lines[1].segments[0].kind, SegmentKind::ListBullet);
+        assert_eq!(lines[2].segments[0].kind, SegmentKind::Link);
+        assert_eq!(lines[3].segments[0].kind, SegmentKind::Code);
+        assert_eq!(lines[4].segments[0].kind, SegmentKind::Code);
+        assert_eq!(lines[6].segments[0].kind, SegmentKind::Quote);
+    }
+
+    #[test]
+    fn renders_segment_kind_for_table_header() {
+        let src = "| a | b |\n| - | - |\n| 1 | 2 |";
+        let lines = render_preview_segments(src, 80);
+        assert_eq!(lines[0].segments[0].kind, SegmentKind::Plain);
+        assert_eq!(lines[1].segments[0].kind, SegmentKind::TableHeader);
+        assert_eq!(lines[2].segments[0].kind, SegmentKind::Plain);
     }
 }

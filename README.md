@@ -34,6 +34,11 @@ tail -f notes.md | mdv --stream
 - `Ctrl+Q` quit
 - `Ctrl+S` save
 - `Ctrl+R` reload from disk
+- `Tab` toggle focused pane
+- `Ctrl+/` toggle help
+- `Alt+,` shrink editor pane
+- `Alt+.` grow editor pane
+- `Ctrl+W` reset split ratio
 - `Ctrl+K` keep local (on external change conflict)
 - `Ctrl+M` insert merge markers (on conflict)
 
@@ -43,6 +48,9 @@ tail -f notes.md | mdv --stream
 - `--no-watch` disable file watcher
 - `--stream` read markdown from stdin (no `PATH` arg)
 - `--perf` show perf info in status line
+- `--theme <auto|default|high-contrast>` set color theme
+- `--no-color` disable ANSI color
+- `--focus <editor|preview>` initial focused pane
 
 ## Installer Env
 

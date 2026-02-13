@@ -211,7 +211,24 @@ fn no_args_shows_help_and_exits_zero() {
     let stderr = String::from_utf8(output.stderr).expect("utf8 stderr");
     assert!(stdout.contains("Usage:"), "stdout: {stdout}");
     assert!(stdout.contains("[PATH]"), "stdout: {stdout}");
+    assert!(stdout.contains("--theme"), "stdout: {stdout}");
+    assert!(stdout.contains("--no-color"), "stdout: {stdout}");
+    assert!(stdout.contains("--focus"), "stdout: {stdout}");
     assert!(stderr.trim().is_empty(), "stderr: {stderr}");
+}
+
+#[test]
+fn invalid_focus_flag_is_rejected() {
+    let output = mdv_cmd()
+        .arg("--focus")
+        .arg("bad")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("run mdv");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).expect("utf8 stderr");
+    assert!(stderr.contains("possible values"), "stderr: {stderr}");
 }
 
 #[test]
@@ -312,6 +329,35 @@ fn pty_force_tui_interactive_handles_external_file_update() {
     {
         let stdin = child.stdin.as_mut().expect("stdin");
         stdin.write_all(&[0x11]).expect("write ctrl+q");
+    }
+    let _ = child.stdin.take();
+
+    let output = wait_with_timeout(child, Duration::from_secs(3));
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn pty_force_tui_interactive_accepts_new_ui_shortcuts() {
+    let path = temp_file("linux-ui-shortcuts", "# title\nx");
+    let command = format!(
+        "{} {}",
+        sh_quote(mdv_bin()),
+        sh_quote(&path.to_string_lossy())
+    );
+    let mut child = spawn_script(&command);
+
+    thread::sleep(Duration::from_millis(350));
+    {
+        let stdin = child.stdin.as_mut().expect("stdin");
+        stdin.write_all(&[0x09]).expect("tab");
+        stdin.write_all(&[0x1f]).expect("ctrl+/");
+        stdin.write_all(&[0x1f]).expect("ctrl+/");
+        stdin.write_all(&[0x11]).expect("ctrl+q");
     }
     let _ = child.stdin.take();
 
