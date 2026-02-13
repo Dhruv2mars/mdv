@@ -141,6 +141,46 @@ impl EditorBuffer {
         self.dirty = true;
     }
 
+    pub fn delete_forward(&mut self) {
+        if self.cursor >= self.text.len() {
+            return;
+        }
+        self.push_undo_snapshot();
+        self.redo_stack.clear();
+        let next = self.next_char_boundary(self.cursor);
+        self.text.replace_range(self.cursor..next, "");
+        self.dirty = true;
+    }
+
+    pub fn delete_word_forward(&mut self) {
+        if self.cursor >= self.text.len() {
+            return;
+        }
+        self.push_undo_snapshot();
+        self.redo_stack.clear();
+
+        let mut end = self.cursor;
+        while end < self.text.len() {
+            let next = self.next_char_boundary(end);
+            let ch = self.text[end..next].chars().next().expect("char");
+            if !ch.is_whitespace() {
+                break;
+            }
+            end = next;
+        }
+        while end < self.text.len() {
+            let next = self.next_char_boundary(end);
+            let ch = self.text[end..next].chars().next().expect("char");
+            if ch.is_whitespace() {
+                break;
+            }
+            end = next;
+        }
+
+        self.text.replace_range(self.cursor..end, "");
+        self.dirty = true;
+    }
+
     pub fn undo(&mut self) -> bool {
         let Some(prev) = self.undo_stack.pop() else {
             return false;
@@ -286,6 +326,122 @@ impl EditorBuffer {
         self.cursor = self.index_at_line_col(line + 1, col);
     }
 
+    pub fn move_word_left(&mut self) {
+        if self.cursor == 0 {
+            return;
+        }
+        let mut start = self.cursor;
+        while start > 0 {
+            let prev = self.prev_char_boundary(start);
+            let ch = self.text[prev..start].chars().next().expect("char");
+            if !ch.is_whitespace() {
+                break;
+            }
+            start = prev;
+        }
+        while start > 0 {
+            let prev = self.prev_char_boundary(start);
+            let ch = self.text[prev..start].chars().next().expect("char");
+            if ch.is_whitespace() {
+                break;
+            }
+            start = prev;
+        }
+        self.cursor = start;
+    }
+
+    pub fn move_word_right(&mut self) {
+        if self.cursor >= self.text.len() {
+            return;
+        }
+        let mut end = self.cursor;
+        while end < self.text.len() {
+            let next = self.next_char_boundary(end);
+            let ch = self.text[end..next].chars().next().expect("char");
+            if ch.is_whitespace() {
+                break;
+            }
+            end = next;
+        }
+        while end < self.text.len() {
+            let next = self.next_char_boundary(end);
+            let ch = self.text[end..next].chars().next().expect("char");
+            if !ch.is_whitespace() || ch == '\n' {
+                break;
+            }
+            end = next;
+        }
+        self.cursor = end;
+    }
+
+    pub fn move_line_start(&mut self) {
+        let (line, _) = self.line_col_at(self.cursor);
+        self.cursor = self.index_at_line_col(line, 0);
+    }
+
+    pub fn move_line_end(&mut self) {
+        let (line, _) = self.line_col_at(self.cursor);
+        let line_start = self.index_at_line_col(line, 0);
+        let rel_end = self.text[line_start..]
+            .find('\n')
+            .map(|offset| line_start + offset)
+            .unwrap_or(self.text.len());
+        self.cursor = rel_end;
+    }
+
+    pub fn move_doc_start(&mut self) {
+        self.cursor = 0;
+    }
+
+    pub fn move_doc_end(&mut self) {
+        self.cursor = self.text.len();
+    }
+
+    pub fn move_paragraph_up(&mut self) {
+        let lines: Vec<&str> = self.text.split('\n').collect();
+        if lines.is_empty() {
+            self.cursor = 0;
+            return;
+        }
+        let (line, _) = self.line_col_at(self.cursor);
+        if line == 0 {
+            self.cursor = 0;
+            return;
+        }
+
+        let mut idx = line.saturating_sub(1);
+        while idx > 0 && lines[idx].trim().is_empty() {
+            idx -= 1;
+        }
+        if lines[idx].trim().is_empty() {
+            self.cursor = 0;
+            return;
+        }
+        while idx > 0 && !lines[idx - 1].trim().is_empty() {
+            idx -= 1;
+        }
+        self.cursor = self.index_at_line_col(idx, 0);
+    }
+
+    pub fn move_paragraph_down(&mut self) {
+        let lines: Vec<&str> = self.text.split('\n').collect();
+        if lines.is_empty() {
+            self.cursor = 0;
+            return;
+        }
+        let (line, _) = self.line_col_at(self.cursor);
+        let mut idx = line;
+        while idx < lines.len() && !lines[idx].trim().is_empty() {
+            idx += 1;
+        }
+        while idx < lines.len() && lines[idx].trim().is_empty() {
+            idx += 1;
+        }
+        if idx < lines.len() {
+            self.cursor = self.index_at_line_col(idx, 0);
+        }
+    }
+
     pub fn line_col_at_cursor(&self) -> (usize, usize) {
         self.line_col_at(self.cursor)
     }
@@ -304,6 +460,38 @@ impl EditorBuffer {
 
     pub fn set_cursor(&mut self, byte_index: usize) {
         self.cursor = self.clamp_to_char_boundary(byte_index);
+    }
+
+    pub fn set_cursor_line_col(&mut self, line: usize, col: usize) {
+        self.cursor = self.index_at_line_col(line, col);
+    }
+
+    pub fn delete_to_line_start(&mut self) {
+        let (line, _) = self.line_col_at(self.cursor);
+        let start = self.index_at_line_col(line, 0);
+        if start == self.cursor {
+            return;
+        }
+        self.push_undo_snapshot();
+        self.redo_stack.clear();
+        self.text.replace_range(start..self.cursor, "");
+        self.cursor = start;
+        self.dirty = true;
+    }
+
+    pub fn delete_to_line_end(&mut self) {
+        let (_, _) = self.line_col_at(self.cursor);
+        let line_end = self.text[self.cursor..]
+            .find('\n')
+            .map(|offset| self.cursor + offset)
+            .unwrap_or(self.text.len());
+        if line_end == self.cursor {
+            return;
+        }
+        self.push_undo_snapshot();
+        self.redo_stack.clear();
+        self.text.replace_range(self.cursor..line_end, "");
+        self.dirty = true;
     }
 
     pub fn replace_range(&mut self, start: usize, end: usize, replacement: &str) -> bool {
@@ -565,6 +753,57 @@ mod tests {
         assert_eq!(buf.cursor(), 0);
         buf.set_cursor(99);
         assert_eq!(buf.cursor(), buf.text().len());
+    }
+
+    #[test]
+    fn word_line_doc_navigation_moves_expected() {
+        let mut buf = EditorBuffer::new("alpha beta\ngamma".into());
+        buf.set_cursor(6);
+        buf.move_word_right();
+        assert_eq!(buf.line_col_at_cursor(), (0, 10));
+        buf.move_word_left();
+        assert_eq!(buf.line_col_at_cursor(), (0, 6));
+        buf.move_line_start();
+        assert_eq!(buf.line_col_at_cursor(), (0, 0));
+        buf.move_line_end();
+        assert_eq!(buf.line_col_at_cursor(), (0, 10));
+        buf.move_doc_end();
+        assert_eq!(buf.cursor(), buf.text().len());
+        buf.move_doc_start();
+        assert_eq!(buf.cursor(), 0);
+    }
+
+    #[test]
+    fn paragraph_navigation_moves_between_blank_line_blocks() {
+        let mut buf = EditorBuffer::new("a\nb\n\nc\nd\n\nz".into());
+        buf.move_doc_start();
+        buf.move_paragraph_down();
+        assert_eq!(buf.line_col_at_cursor(), (3, 0));
+        buf.move_paragraph_down();
+        assert_eq!(buf.line_col_at_cursor(), (6, 0));
+        buf.move_paragraph_up();
+        assert_eq!(buf.line_col_at_cursor(), (3, 0));
+        buf.move_paragraph_up();
+        assert_eq!(buf.line_col_at_cursor(), (0, 0));
+    }
+
+    #[test]
+    fn forward_and_range_delete_behaviors_work() {
+        let mut buf = EditorBuffer::new("alpha beta".into());
+        buf.move_doc_start();
+        buf.delete_forward();
+        assert_eq!(buf.text(), "lpha beta");
+        buf.delete_word_forward();
+        assert_eq!(buf.text(), " beta");
+
+        let mut line_buf = EditorBuffer::new("left right\nnext".into());
+        line_buf.move_doc_start();
+        line_buf.move_line_end();
+        line_buf.delete_to_line_start();
+        assert_eq!(line_buf.text(), "\nnext");
+        line_buf.move_doc_start();
+        line_buf.delete_to_line_end();
+        assert_eq!(line_buf.text(), "\nnext");
     }
 
     #[test]
