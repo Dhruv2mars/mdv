@@ -1,15 +1,21 @@
 # Troubleshooting + FAQ
 
-## File Not Updating
+## I Typed But Nothing Changed
 
-- Ensure watcher enabled (no `--no-watch`)
-- Use `Ctrl+R` for manual reload
+- You may be focused on the preview, not the editor
+- Press `Shift+Tab` to switch focus back to typing
 
-## Terminal Too Small
+## The File Did Not Update
 
-- Expand terminal for best docs/pane layout
-- mdv falls back to compact hints on tiny sizes
+- Make sure watcher is enabled by not using `--no-watch`
+- Use `Ctrl+R` to reload from disk manually
 
-## Wrong Mode
+## The Terminal Feels Too Small
 
-- Press `Shift+Tab` to switch editor/view
+- Make the window larger for the best split view
+- On very small terminals, mdv falls back to a compact layout
+
+## I Do Not Know The Keys
+
+- Open Docs + Settings with `Cmd+,` / `Ctrl+,`
+- Start with just these: `Enter`, `Ctrl+S`, `Shift+Tab`, `Ctrl+Q`

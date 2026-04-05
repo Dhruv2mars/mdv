@@ -1,6 +1,9 @@
 # mdv
 
-Terminal markdown visualizer/editor (Rust TUI).
+mdv is a simple Markdown app for your terminal.
+
+You can open a file, type notes on the left, and see the formatted preview on the right.
+If you are new to TUIs, that is fine: `mdv` starts with a Home screen and an in-app guide.
 
 ## Install
 
@@ -20,24 +23,74 @@ Supported release binaries:
 - `win32-arm64`
 - `win32-x64`
 
-## Use
+## Quickstart
+
+```bash
+mdv
+```
+
+What happens next:
+- Type a file name like `notes.md`
+- Press `Enter`
+- Start typing
+- Press `Ctrl+S` to save
+
+If the file does not exist yet, `mdv` creates it on your first save.
+
+Open an existing file directly:
 
 ```bash
 mdv README.md
 ```
 
-Manual upgrade:
-```bash
-mdv update
-```
-Uses detected install manager (bun/pnpm/yarn/npm), prefers original installer metadata.
+Open the in-app docs any time:
+- macOS: `Cmd+,`
+- Windows/Linux: `Ctrl+,`
 
-Stream mode (stdin):
+## If You Are New To Markdown
+
+You do not need to know Markdown to start.
+Plain text works.
+
+Useful basics:
+- `# Heading` makes a heading
+- `- item` makes a bullet list
+- A blank line starts a new paragraph
+
+Example:
+
+```md
+# Shopping List
+
+- milk
+- bread
+- fruit
+```
+
+## Everyday Tasks
+
+Create a new note:
+- Run `mdv`
+- Type `notes/today.md`
+- Press `Enter`
+- Type your note
+- Press `Ctrl+S`
+
+Read a file without editing:
+- Run `mdv --readonly README.md`
+
+Watch streamed Markdown from another command:
 ```bash
 tail -f notes.md | mdv --stream
 ```
 
-## Keys
+Update the installed launcher:
+```bash
+mdv update
+```
+Uses the detected install manager and prefers the one that installed `mdv`.
+
+## Keybinds
 
 In-app docs: `Cmd+,/Ctrl+,` (Docs + Settings modal).
 
@@ -45,10 +98,13 @@ Quick ref:
 - `Ctrl+Q` quit
 - `Ctrl+S` save
 - `Ctrl+R` reload from disk
-- `Shift+Tab` (or `Ctrl+T`) switch editor/view mode
+- `Shift+Tab` or `Ctrl+T` switch between typing and preview scrolling
 - `Ctrl+F` search, `Ctrl+H` replace, `Ctrl+G` goto line
 - `F3`/`Shift+F3` next/prev search result
 - Conflict flow: `Ctrl+J`/`Ctrl+U` hunk nav, `Ctrl+E` apply, `Ctrl+K` keep local, `Ctrl+M` merge
+
+Beginner tip:
+- If arrow keys or mouse wheel are moving the wrong side, press `Shift+Tab` to switch focus.
 
 ## Flags
 
@@ -59,6 +115,12 @@ Quick ref:
 - `--theme <auto|default|high-contrast>` set color theme
 - `--no-color` disable ANSI color
 - `--focus <editor|view>` initial focused pane
+
+## Need Help?
+
+- Start with `mdv` and follow the first-run guide
+- Open in-app docs with `Cmd+,` / `Ctrl+,`
+- Use `Ctrl+Q` to quit safely at any time
 
 ## Installer Env
 

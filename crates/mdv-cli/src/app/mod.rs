@@ -760,14 +760,14 @@ impl App {
                 }
                 (KeyCode::Enter, _) => {
                     if self.home_query.trim().is_empty() {
-                        self.status = "Home: type a path".into();
+                        self.status = "Home: type a file name or path".into();
                     } else {
                         self.open_home_path(PathBuf::from(self.home_query.trim()));
                     }
                 }
                 (KeyCode::Esc, _) => {
                     self.home_query.clear();
-                    self.status = "Home: query cleared".into();
+                    self.status = "Home: file field cleared".into();
                 }
                 (KeyCode::Backspace, mods)
                     if mods.contains(KeyModifiers::SUPER)
@@ -790,15 +790,15 @@ impl App {
                     {
                         self.home_query.pop();
                     }
-                    self.status = format!("Home path: {}", self.home_query);
+                    self.status = format!("Open/create: {}", self.home_query);
                 }
                 (KeyCode::Backspace, _) => {
                     self.home_query.pop();
-                    self.status = format!("Home path: {}", self.home_query);
+                    self.status = format!("Open/create: {}", self.home_query);
                 }
                 (KeyCode::Char(c), KeyModifiers::NONE | KeyModifiers::SHIFT) => {
                     self.home_query.push(c);
-                    self.status = format!("Home path: {}", self.home_query);
+                    self.status = format!("Open/create: {}", self.home_query);
                 }
                 _ => {}
             }
@@ -1875,7 +1875,7 @@ impl App {
         self.onboarding_gate_checked = true;
         if self.home_mode && self.interactive_input && !self.onboarding_seen {
             self.ui.help.open_onboarding();
-            self.status = "Welcome guide opened".into();
+            self.status = "Beginner guide opened".into();
         }
     }
 
@@ -1889,7 +1889,7 @@ impl App {
             .min(total.saturating_sub(1));
         if step + 1 >= total {
             self.close_docs_modal();
-            self.status = "Onboarding complete".into();
+            self.status = "Guide complete".into();
             return;
         }
         self.ui.help.section_idx = step + 1;
@@ -2025,7 +2025,7 @@ impl App {
         frame.render_widget(content, body[1]);
 
         let hint = if self.ui.help.is_onboarding() {
-            "Esc close | Up/Down step | Enter next | Tab/Left/Right focus"
+            "Esc skip guide | Up/Down step | Enter next | Tab/Left/Right focus"
         } else {
             "Esc close | Enter open | Tab/Left/Right focus | PgUp/PgDn/Home/End/j/k scroll"
         };
@@ -2264,7 +2264,7 @@ impl App {
     }
 
     fn draw_home(&mut self, frame: &mut Frame<'_>, area: Rect, theme: &ThemeTokens) {
-        let popup = centered_popup(60, 16, area);
+        let popup = centered_popup(64, 18, area);
         frame.render_widget(Clear, popup);
 
         // ASCII art logo
@@ -2284,7 +2284,7 @@ impl App {
                 Span::styled("iewer", subtitle_style),
             ]),
             Line::from(Span::styled(
-                "  Terminal-first editor & previewer",
+                "  Write notes in your terminal with live preview",
                 hint_style,
             )),
             Line::from(""),
@@ -2293,11 +2293,20 @@ impl App {
                 hint_style,
             )),
             Line::from(""),
+            Line::from(Span::styled(
+                "  New here? Type a file name like notes.md and press Enter.",
+                hint_style,
+            )),
+            Line::from(Span::styled(
+                "  mdv creates the file on first save if it does not exist yet.",
+                hint_style,
+            )),
+            Line::from(""),
             Line::from(vec![
-                Span::styled("  Path: ", input_label_style),
+                Span::styled("  File: ", input_label_style),
                 Span::styled(
                     if self.home_query.is_empty() {
-                        "Enter file path..."
+                        "notes.md"
                     } else {
                         &self.home_query
                     },
@@ -2316,9 +2325,9 @@ impl App {
             Line::from(""),
             Line::from(vec![
                 Span::styled("  Enter", key_style),
-                Span::styled(" open  ", hint_style),
+                Span::styled(" open/create  ", hint_style),
                 Span::styled("Ctrl+,", key_style),
-                Span::styled(" docs  ", hint_style),
+                Span::styled(" help  ", hint_style),
                 Span::styled("Ctrl+Q", key_style),
                 Span::styled(" quit", hint_style),
             ]),
@@ -2365,21 +2374,21 @@ impl App {
 
     fn status_hint(&self) -> String {
         let base = if self.replace_find_mode {
-            "replace: enter find"
+            "replace: type text to find"
         } else if self.replace_with_mode {
-            "replace: enter with | Ctrl+A all"
+            "replace: type replacement | Ctrl+A all"
         } else if self.search_mode {
-            "search: Enter apply"
+            "search: type text + Enter"
         } else if self.goto_mode {
-            "goto: Enter apply"
+            "goto: type line number + Enter"
         } else if self.ui.help.open {
-            "Esc close docs"
+            "Esc close help"
         } else if self.home_mode {
-            "home: type path + Enter"
+            "home: type a file name or path + Enter"
         } else if self.ui.focus == PaneFocus::Editor && !self.readonly && !self.stream_mode {
-            "Tab indent | Shift+Arrows select | Cmd/Alt+Backspace word | Shift+Tab mode"
+            "Type to edit | Shift+Arrows select | Cmd/Alt+Backspace word | Shift+Tab switch panes"
         } else {
-            "Shift+Tab mode | Cmd+,/Ctrl+, docs"
+            "Shift+Tab switch panes | Cmd+,/Ctrl+, help"
         };
 
         if let Some(conflict) = self.editor.conflict()
@@ -3498,7 +3507,7 @@ mod tests {
         )
         .expect("finish onboarding");
         assert!(!home.ui.help.open);
-        assert_eq!(home.status, "Onboarding complete");
+        assert_eq!(home.status, "Guide complete");
     }
 
     #[test]
@@ -4438,11 +4447,11 @@ mod tests {
         app.handle_key(key(KeyCode::Esc, KeyModifiers::NONE), &mut running)
             .expect("esc");
         assert_eq!(app.home_query, "");
-        assert_eq!(app.status, "Home: query cleared");
+        assert_eq!(app.status, "Home: file field cleared");
 
         app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE), &mut running)
             .expect("enter empty");
-        assert_eq!(app.status, "Home: type a path");
+        assert_eq!(app.status, "Home: type a file name or path");
 
         app.handle_key(key(KeyCode::Char('x'), KeyModifiers::NONE), &mut running)
             .expect("type x");
@@ -5092,42 +5101,46 @@ mod tests {
         terminal.draw(|frame| app.draw(frame)).expect("draw");
         let rendered = terminal.backend().buffer().content();
         assert!(rendered.iter().any(|cell| cell.symbol() == "m"));
-        assert!(rendered.iter().any(|cell| cell.symbol() == "P"));
+        assert!(rendered.iter().any(|cell| cell.symbol() == "F"));
+        assert!(rendered.iter().any(|cell| cell.symbol() == "n"));
     }
 
     #[test]
     fn helper_mode_and_status_branches() {
         let mut app = App::new_stream_for_test(false);
         assert_eq!(mode_label(&app), "stream");
-        assert_eq!(app.status_hint(), "Shift+Tab mode | Cmd+,/Ctrl+, docs");
+        assert_eq!(
+            app.status_hint(),
+            "Shift+Tab switch panes | Cmd+,/Ctrl+, help"
+        );
 
         app.search_mode = true;
         assert_eq!(mode_label(&app), "search");
-        assert_eq!(app.status_hint(), "search: Enter apply");
+        assert_eq!(app.status_hint(), "search: type text + Enter");
 
         app.search_mode = false;
         app.goto_mode = true;
         assert_eq!(mode_label(&app), "goto");
-        assert_eq!(app.status_hint(), "goto: Enter apply");
+        assert_eq!(app.status_hint(), "goto: type line number + Enter");
 
         app.goto_mode = false;
         app.replace_find_mode = true;
         assert_eq!(mode_label(&app), "replace");
-        assert_eq!(app.status_hint(), "replace: enter find");
+        assert_eq!(app.status_hint(), "replace: type text to find");
 
         app.replace_find_mode = false;
         app.replace_with_mode = true;
         assert_eq!(mode_label(&app), "replace");
-        assert_eq!(app.status_hint(), "replace: enter with | Ctrl+A all");
+        assert_eq!(app.status_hint(), "replace: type replacement | Ctrl+A all");
 
         app.replace_with_mode = false;
         app.ui.help.open = true;
-        assert_eq!(app.status_hint(), "Esc close docs");
+        assert_eq!(app.status_hint(), "Esc close help");
 
         app.ui.help.open = false;
         app.stream_mode = false;
         app.readonly = false;
-        assert!(app.status_hint().contains("Tab indent"));
+        assert!(app.status_hint().contains("Type to edit"));
     }
 
     #[test]

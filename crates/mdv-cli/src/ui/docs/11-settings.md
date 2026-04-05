@@ -1,14 +1,15 @@
 # Settings + Display
 
-## In-App
+## In The App
 
 - Open Docs + Settings: `Cmd+,` (macOS) / `Ctrl+,` (Windows/Linux)
 - Close modal: `Esc`
 
-## Startup Flags
+## Helpful Startup Flags
 
 - Theme: `--theme`
-- Monochrome: `--no-color`
-- Initial pane focus: `--focus`
+- Plain terminal colors: `--no-color`
+- Start in preview focus: `--focus view`
+- Open without editing: `--readonly`
 
-> Docs entry is always shown on Home screen.
+> If you forget the controls, go back to Docs + Settings. It is meant to be your built-in help screen.

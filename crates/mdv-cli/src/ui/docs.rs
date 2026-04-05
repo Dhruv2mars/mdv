@@ -83,22 +83,22 @@ static ONBOARDING_SECTIONS: [DocSection; 4] = [
     DocSection {
         id: "onboarding-welcome",
         title: "1. Welcome",
-        body: "# Welcome\n\nThis quick guide shows core mdv flow.\n\n- Continue with Enter\n- Exit onboarding with Esc",
+        body: "# Welcome\n\nmdv is a simple Markdown editor for your terminal.\n\nYou do not need to know Markdown yet. Plain text is enough to start.\n\n- Press `Enter` for the next step\n- Press `Esc` if you want to skip the guide",
     },
     DocSection {
         id: "onboarding-open",
-        title: "2. Open File",
-        body: "# Open a File\n\nFrom Home, type a path then press `Enter`.\n\n> Missing path creates a new file on first save.",
+        title: "2. Open or Create",
+        body: "# Open or Create a File\n\nOn the Home screen, type a file name like `notes.md` and press `Enter`.\n\n> If the file does not exist, mdv will create it when you save for the first time.",
     },
     DocSection {
-        id: "onboarding-modes",
-        title: "3. Modes + Keys",
-        body: "# Modes + Keys\n\n- Toggle editor/view: `Shift+Tab`\n- Save: `Ctrl+S`\n- Search: `Ctrl+F`\n- Quit: `Ctrl+Q`",
+        id: "onboarding-write",
+        title: "3. Write + Save",
+        body: "# Write + Save\n\nType in the editor pane.\n\nUseful Markdown basics:\n- `# Heading`\n- `- bullet item`\n\nSave any time with `Ctrl+S`.",
     },
     DocSection {
         id: "onboarding-reopen",
-        title: "4. Reopen Docs",
-        body: "# Reopen Docs Anytime\n\nUse `Cmd+,` on macOS or `Ctrl+,` on Windows/Linux.\n\n> This guide auto-shows once on Home.",
+        title: "4. Move Around + Help",
+        body: "# Move Around + Help\n\n- Press `Shift+Tab` to switch between typing and preview scrolling\n- Press `Ctrl+Q` to quit\n- Reopen docs with `Cmd+,` on macOS or `Ctrl+,` on Windows/Linux\n\n> This guide auto-shows once on the Home screen.",
     },
 ];
 
@@ -260,7 +260,7 @@ mod tests {
         assert_eq!(docs.title, "First-Run Guide");
         assert_eq!(section_count(docs), 4);
         assert_eq!(docs.sections[0].title, "1. Welcome");
-        assert_eq!(docs.sections[3].title, "4. Reopen Docs");
+        assert_eq!(docs.sections[3].title, "4. Move Around + Help");
     }
 
     #[test]

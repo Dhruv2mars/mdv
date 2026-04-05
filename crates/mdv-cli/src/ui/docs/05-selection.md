@@ -1,13 +1,18 @@
 # Selection, Navigation, Deletion
 
-## Select
+## The Basics
 
-- Expand by char: `Shift+Arrow`
-- Expand by word: `Shift+Alt+Arrow` (macOS) / `Shift+Ctrl+Arrow` (Windows/Linux)
+- Move one character: `Arrow`
+- Move one word: `Alt+Arrow` (macOS) / `Ctrl+Arrow` (Windows/Linux)
+- Select text by character: `Shift+Arrow`
+
+## Bigger Selections
+
+- Select by word: `Shift+Alt+Arrow` (macOS) / `Shift+Ctrl+Arrow` (Windows/Linux)
 - Select all: `Cmd+A` (macOS) / `Ctrl+A` (Windows/Linux)
 
-## Move + Delete
+## Faster Deletion
 
-- Word nav: `Alt+Arrow` (macOS) / `Ctrl+Arrow` (Windows/Linux)
-- Delete word back: `Alt+Backspace` (macOS) / `Ctrl+Backspace` (Windows/Linux)
+- Delete previous word: `Alt+Backspace` (macOS) / `Ctrl+Backspace` (Windows/Linux)
 - Delete to line start: `Cmd+Backspace` (macOS) / `Ctrl+Backspace` (Windows/Linux)
+- Delete next word: `Alt+Delete` (macOS) / `Ctrl+Delete` (Windows/Linux)

@@ -1,6 +1,8 @@
 # @dhruv2mars/mdv
 
-Fast terminal markdown viewer/editor.
+mdv is a simple Markdown app for your terminal.
+
+Type on the left, read the preview on the right, and use the built-in guide if you are new.
 
 ## Install
 
@@ -23,8 +25,32 @@ Supported release binaries:
 ## Usage
 
 ```bash
+mdv
+```
+
+Quick first run:
+- Type a file name like `notes.md`
+- Press `Enter`
+- Type your note
+- Press `Ctrl+S`
+
+Open an existing file directly:
+
+```bash
 mdv README.md
 ```
+
+If the file does not exist yet, `mdv` creates it on your first save.
+
+Open the in-app docs any time:
+- macOS: `Cmd+,`
+- Windows/Linux: `Ctrl+,`
+
+If you do not know Markdown yet, start with plain text.
+Common basics:
+- `# Heading`
+- `- bullet item`
+- blank line for a new paragraph
 
 Manual upgrade:
 
@@ -47,9 +73,12 @@ Quick ref:
 - `Ctrl+Q` quit
 - `Ctrl+S` save
 - `Ctrl+R` reload
-- `Shift+Tab` (or `Ctrl+T`) switch editor/view mode
+- `Shift+Tab` or `Ctrl+T` switch between typing and preview scrolling
 - `Ctrl+F` search, `Ctrl+H` replace, `Ctrl+G` goto
 - Conflict flow: `Ctrl+J`/`Ctrl+U` hunk nav, `Ctrl+E` apply, `Ctrl+K` keep local, `Ctrl+M` merge
+
+Beginner tip:
+- If scrolling is moving the preview instead of the editor, press `Shift+Tab`.
 
 ## Flags
 
