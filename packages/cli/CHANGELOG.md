@@ -1,5 +1,11 @@
 # @dhruv2mars/mdv
 
+## 0.0.21
+
+### Patch Changes
+
+- Polish release quality with the right `mdv` help output, sturdier CLI/help regression coverage, and cleaner npm publish metadata.
+
 ## 0.0.20
 
 ### Patch Changes

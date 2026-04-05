@@ -1,6 +1,6 @@
 {
   "name": "@dhruv2mars/mdv",
-  "version": "0.0.20",
+  "version": "0.0.21",
   "description": "Terminal-first markdown visualizer/editor",
   "type": "module",
   "bin": {
@@ -38,6 +38,9 @@
   },
   "preferGlobal": true,
   "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
   "devDependencies": {
     "@mdv/rust": "workspace:*"
   }
