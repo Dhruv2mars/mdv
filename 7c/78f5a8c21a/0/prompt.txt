@@ -1,0 +1,5 @@
+ok, now we have to do some cosmetic and feel good upgrades. the documentation all around should be targeted towards the end user. whatever you feel like should be improved or changed/updated, do that. the goal is, a newcomer, who doesnt know how to use a TUI or anything about markdown should be able to do everything with ease in mdv.
+
+---
+
+great. but now i want you to do something for me. you see, in the docs/settings section of mdv, there are all the things listed that one can do. and since you have already seen and understood the whole codebase, you know how things work, how to do them, etc. now i want you to use the TUI yourself, and do everything (every functionality and feature) yourself. all the functions and features that one can do in the tui, you should perform them. if something is not right, fix that then and there.

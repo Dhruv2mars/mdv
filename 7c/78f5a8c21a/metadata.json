@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "7c78f5a8c21a",
+  "strategy": "manual-commit",
+  "branch": "fix/tui-feature-sweep",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "crates/mdv-cli/src/ui/docs.rs",
+    "crates/mdv-cli/src/ui/docs/05-selection.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/7c/78f5a8c21a/0/metadata.json",
+      "transcript": "/7c/78f5a8c21a/0/full.jsonl",
+      "content_hash": "/7c/78f5a8c21a/0/content_hash.txt",
+      "prompt": "/7c/78f5a8c21a/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 12920845,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 12644352,
+    "output_tokens": 43146,
+    "api_call_count": 95
+  }
+}
