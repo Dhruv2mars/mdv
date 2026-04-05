@@ -2,15 +2,19 @@
 
 ## Main Modes
 
-- `mdv <path>`: open/edit file
-- `mdv` (no path): Home screen
-- `mdv --stream`: render stdin updates
+- `mdv <path>` opens a file
+- `mdv` starts on the Home screen
+- `mdv --stream` renders Markdown coming from another command
 
-## Useful Flags
+Examples:
+- `mdv notes.md`
+- `mdv --readonly README.md`
+- `tail -f notes.md | mdv --stream`
 
-- `--readonly`
-- `--no-watch`
-- `--perf`
-- `--theme <auto|default|high-contrast>`
-- `--no-color`
-- `--focus <editor|view>`
+## Helpful Flags
+
+- `--readonly` open without editing
+- `--no-watch` ignore outside file changes
+- `--theme <auto|default|high-contrast>` choose colors
+- `--no-color` use plain terminal text
+- `--focus <editor|view>` choose which pane starts focused

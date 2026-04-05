@@ -1,11 +1,17 @@
 # Editor vs View Modes
 
-- Editor mode: writes markdown text
-- View mode: scrolls rendered preview
+mdv has two main focus states:
+- Editor mode: your keys change the text
+- View mode: your keys scroll the rendered preview
 
-## Toggle
+## Switch Between Them
 
-- `Shift+Tab` (macOS + Windows/Linux)
-- `Ctrl+T` (macOS + Windows/Linux)
+- `Shift+Tab`
+- `Ctrl+T`
 
-> Tip: set startup focus with `--focus view`.
+## How To Tell Which One Is Active
+
+- The focused pane has the stronger border
+- Arrow keys and mouse wheel affect the focused side
+
+> Tip: if scrolling is moving the wrong side, press `Shift+Tab`.

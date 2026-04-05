@@ -1,12 +1,18 @@
 # External Change Conflicts
 
-When file changes outside mdv while buffer is dirty, mdv shows conflict blocks.
+This happens when:
+- you changed the file in mdv
+- something else also changed the same file on disk
+
+mdv shows conflict blocks so you can decide what to keep.
 
 ## Conflict Keys
 
-- Next hunk: `Ctrl+J`
-- Prev hunk: `Ctrl+U`
-- Apply external hunk: `Ctrl+E`
-- Keep local version: `Ctrl+K`
-- Merge markers: `Ctrl+M`
-- Reload external full file: `Ctrl+R`
+- Next changed block: `Ctrl+J`
+- Previous changed block: `Ctrl+U`
+- Use the disk version for the current block: `Ctrl+E`
+- Keep your local version: `Ctrl+K`
+- Merge both sides with markers: `Ctrl+M`
+- Reload the whole file from disk: `Ctrl+R`
+
+> If you are unsure, `Ctrl+K` keeps what you typed in mdv.
