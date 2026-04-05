@@ -12,7 +12,7 @@ use clap::{CommandFactory, Parser, ValueEnum};
 use mdv_core::render_preview_lines;
 
 #[derive(Debug, Parser)]
-#[command(name = "mdv", about = "Terminal markdown visualizer")]
+#[command(name = "mdv", bin_name = "mdv", about = "Terminal markdown visualizer")]
 struct Cli {
     /// Markdown file path
     path: Option<PathBuf>,
@@ -161,7 +161,11 @@ mod tests {
     use std::sync::Mutex;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use super::{preview_width_from_env, print_preview_to, read_initial_text};
+    use super::{
+        CliFocus, CliTheme, apply_ui_flags, preview_width_from_env, print_preview_to,
+        read_initial_text,
+    };
+    use crate::app::{App, PaneFocus, ThemeChoice};
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
@@ -194,6 +198,11 @@ mod tests {
         let missing = temp_path("missing");
         assert_eq!(read_initial_text(&missing).expect("missing ok"), "");
 
+        let existing = temp_path("existing");
+        fs::write(&existing, "# hello\n").expect("write file");
+        assert_eq!(read_initial_text(&existing).expect("existing"), "# hello\n");
+        let _ = fs::remove_file(&existing);
+
         let dir = temp_path("dir");
         fs::create_dir(&dir).expect("mkdir");
         let err = read_initial_text(&dir).expect_err("dir err");
@@ -215,8 +224,8 @@ mod tests {
 
     #[test]
     fn print_preview_to_propagates_write_errors() {
-        struct FailWriter;
-        impl io::Write for FailWriter {
+        struct WriteFailWriter;
+        impl io::Write for WriteFailWriter {
             fn write(&mut self, _buf: &[u8]) -> io::Result<usize> {
                 Err(io::Error::other("write fail"))
             }
@@ -225,7 +234,40 @@ mod tests {
             }
         }
 
-        let err = print_preview_to("x", 80, FailWriter).expect_err("expected write err");
+        let mut write_fail = WriteFailWriter;
+        io::Write::flush(&mut write_fail).expect("flush ok");
+        let err = print_preview_to("x", 80, WriteFailWriter).expect_err("expected write err");
         assert!(err.to_string().contains("write fail"));
+
+        struct FlushFailWriter {
+            buf: Vec<u8>,
+        }
+        impl io::Write for FlushFailWriter {
+            fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+                self.buf.extend_from_slice(buf);
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Err(io::Error::other("flush fail"))
+            }
+        }
+
+        let err = print_preview_to("x", 80, FlushFailWriter { buf: Vec::new() })
+            .expect_err("expected flush err");
+        assert!(err.to_string().contains("flush fail"));
+    }
+
+    #[test]
+    fn apply_ui_flags_maps_theme_focus_and_color_options() {
+        let mut app = App::new_stream(false).expect("stream app");
+        apply_ui_flags(&mut app, CliTheme::Default, true, CliFocus::View);
+        assert_eq!(app.ui_state().theme, ThemeChoice::Default);
+        assert!(app.ui_state().no_color);
+        assert_eq!(app.ui_state().focus, PaneFocus::Preview);
+
+        apply_ui_flags(&mut app, CliTheme::HighContrast, false, CliFocus::Editor);
+        assert_eq!(app.ui_state().theme, ThemeChoice::HighContrast);
+        assert!(!app.ui_state().no_color);
+        assert_eq!(app.ui_state().focus, PaneFocus::Editor);
     }
 }

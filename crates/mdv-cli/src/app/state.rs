@@ -167,10 +167,12 @@ mod tests {
 
     #[test]
     fn help_nav_changes_index_and_scroll_with_bounds() {
-        let mut help = HelpState::default();
-        help.open = true;
-        help.section_idx = 1;
-        help.scroll = 8;
+        let mut help = HelpState {
+            open: true,
+            section_idx: 1,
+            scroll: 8,
+            ..HelpState::default()
+        };
         apply_help_nav(&mut help, HelpNavAction::Up, 4, 100, 10);
         assert_eq!(help.section_idx, 0);
         assert_eq!(help.scroll, 0);
@@ -188,9 +190,11 @@ mod tests {
 
     #[test]
     fn help_nav_scrolls_content_and_switches_focus() {
-        let mut help = HelpState::default();
-        help.open = true;
-        help.index_focus = false;
+        let mut help = HelpState {
+            open: true,
+            index_focus: false,
+            ..HelpState::default()
+        };
 
         apply_help_nav(&mut help, HelpNavAction::Down, 3, 24, 10);
         apply_help_nav(&mut help, HelpNavAction::Down, 3, 24, 10);
@@ -225,5 +229,34 @@ mod tests {
         assert!(!help.index_focus);
         assert_eq!(help.scroll, 0);
         assert_eq!(help.onboarding_step, Some(2));
+    }
+
+    #[test]
+    fn help_nav_handles_zero_sections_page_up_and_onboarding_index_updates() {
+        let mut help = HelpState {
+            open: true,
+            section_idx: 1,
+            scroll: 6,
+            onboarding_step: Some(1),
+            ..HelpState::default()
+        };
+
+        apply_help_nav(&mut help, HelpNavAction::Up, 0, 50, 10);
+        assert_eq!(help.section_idx, 1);
+        assert_eq!(help.scroll, 6);
+        assert_eq!(help.onboarding_step, Some(1));
+
+        apply_help_nav(&mut help, HelpNavAction::Up, 4, 50, 10);
+        assert_eq!(help.section_idx, 0);
+        assert_eq!(help.onboarding_step, Some(0));
+
+        apply_help_nav(&mut help, HelpNavAction::Down, 4, 50, 10);
+        assert_eq!(help.section_idx, 1);
+        assert_eq!(help.onboarding_step, Some(1));
+
+        help.index_focus = false;
+        help.scroll = 9;
+        apply_help_nav(&mut help, HelpNavAction::PageUp, 4, 50, 10);
+        assert_eq!(help.scroll, 0);
     }
 }
