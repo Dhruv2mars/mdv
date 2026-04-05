@@ -14,5 +14,5 @@
 ## Faster Deletion
 
 - Delete previous word: `Alt+Backspace` (macOS) / `Ctrl+Backspace` (Windows/Linux)
-- Delete to line start: `Cmd+Backspace` (macOS) / `Ctrl+Backspace` (Windows/Linux)
+- Delete to line start: `Cmd+Backspace` (macOS)
 - Delete next word: `Alt+Delete` (macOS) / `Ctrl+Delete` (Windows/Linux)
