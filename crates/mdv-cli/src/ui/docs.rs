@@ -318,7 +318,10 @@ mod tests {
             body: "abc. not ordered",
         };
         let non_bullet_lines = render_section(&non_bullet, &theme);
-        assert_eq!(non_bullet_lines[0].spans[0].content.as_ref(), "abc. not ordered");
+        assert_eq!(
+            non_bullet_lines[0].spans[0].content.as_ref(),
+            "abc. not ordered"
+        );
 
         let empty = super::DocSection {
             id: "empty",
