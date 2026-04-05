@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "2c6291268aba",
+  "strategy": "manual-commit",
+  "branch": "fix/node24-actions",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/2c/6291268aba/0/metadata.json",
+      "transcript": "/2c/6291268aba/0/full.jsonl",
+      "content_hash": "/2c/6291268aba/0/content_hash.txt",
+      "prompt": "/2c/6291268aba/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 5429267,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 5196672,
+    "output_tokens": 11298,
+    "api_call_count": 39
+  }
+}
