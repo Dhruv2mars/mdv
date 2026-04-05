@@ -1,1 +1,1 @@
-ok, so now that you understand the vision and thought behind mdv and what was my thinking and requriements for building it. i want you to do a full end to end sweep of the whole project workflow like a real user would. on the way, if you encuonter any bugs or issues that are or can cause problmes, fix them then and there. once everything is good localally then do the release. also, if you find something odd or off place, you can fix that too!
+ok then, you should fix that as well
