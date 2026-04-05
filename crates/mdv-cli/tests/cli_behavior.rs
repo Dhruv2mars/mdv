@@ -57,6 +57,15 @@ fn wait_with_timeout(mut child: std::process::Child, timeout: Duration) -> Outpu
     }
 }
 
+fn test_timeout(ms: u64) -> Duration {
+    let factor = if std::env::var_os("LLVM_PROFILE_FILE").is_some() {
+        4
+    } else {
+        1
+    };
+    Duration::from_millis(ms.saturating_mul(factor))
+}
+
 fn assert_force_tui_exit_or_known_io_error(output: Output) {
     if output.status.success() {
         return;
@@ -100,7 +109,7 @@ fn path_mode_non_tty_renders_once_and_exits() {
         .spawn()
         .expect("spawn mdv");
 
-    let output = wait_with_timeout(child, Duration::from_millis(1200));
+    let output = wait_with_timeout(child, test_timeout(1200));
     let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
 
     assert!(
@@ -124,7 +133,7 @@ fn path_mode_non_tty_large_file_exits() {
         .spawn()
         .expect("spawn mdv");
 
-    let output = wait_with_timeout(child, Duration::from_millis(4000));
+    let output = wait_with_timeout(child, test_timeout(4000));
     assert!(
         output.status.success(),
         "stderr: {}",
@@ -148,7 +157,7 @@ fn stream_mode_reads_stdin_non_tty_and_exits() {
     }
     let _ = child.stdin.take();
 
-    let output = wait_with_timeout(child, Duration::from_millis(1200));
+    let output = wait_with_timeout(child, test_timeout(1200));
     let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
     assert!(
         output.status.success(),
@@ -175,7 +184,7 @@ fn stream_mode_invalid_utf8_hits_error_path_and_exits() {
     }
     let _ = child.stdin.take();
 
-    let output = wait_with_timeout(child, Duration::from_millis(1200));
+    let output = wait_with_timeout(child, test_timeout(1200));
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("valid UTF-8"), "stderr: {}", stderr);
@@ -210,6 +219,7 @@ fn no_args_shows_help_and_exits_zero() {
     let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
     let stderr = String::from_utf8(output.stderr).expect("utf8 stderr");
     assert!(stdout.contains("Usage:"), "stdout: {stdout}");
+    assert!(stdout.contains("Usage: mdv "), "stdout: {stdout}");
     assert!(stdout.contains("[PATH]"), "stdout: {stdout}");
     assert!(stdout.contains("--theme"), "stdout: {stdout}");
     assert!(stdout.contains("--no-color"), "stdout: {stdout}");
@@ -258,7 +268,7 @@ fn no_args_force_tui_opens_home_and_exits() {
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn mdv");
-    let output = wait_with_timeout(child, Duration::from_millis(1200));
+    let output = wait_with_timeout(child, test_timeout(1200));
     assert_force_tui_exit_or_known_io_error(output);
 }
 
@@ -273,7 +283,7 @@ fn path_mode_force_tui_still_exits_non_interactive() {
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn mdv");
-    let output = wait_with_timeout(child, Duration::from_millis(1200));
+    let output = wait_with_timeout(child, test_timeout(1200));
     assert_force_tui_exit_or_known_io_error(output);
 }
 
@@ -292,7 +302,7 @@ fn stream_mode_force_tui_exits_after_stdin_close() {
         stdin.write_all(b"# one\n").expect("write");
     }
     let _ = child.stdin.take();
-    let output = wait_with_timeout(child, Duration::from_millis(1200));
+    let output = wait_with_timeout(child, test_timeout(1200));
     assert_force_tui_exit_or_known_io_error(output);
 }
 

@@ -430,6 +430,11 @@ impl App {
         );
     }
 
+    #[cfg(test)]
+    pub(crate) fn ui_state(&self) -> &UiState {
+        &self.ui
+    }
+
     pub fn run(&mut self) -> Result<()> {
         let mut stdout = io::stdout();
         stdout.execute(EnterAlternateScreen)?;
@@ -2493,22 +2498,6 @@ fn preview_title_with_scroll(
     }
 }
 
-fn preview_title(
-    selected_conflict_hunk: usize,
-    conflict: Option<&mdv_core::ConflictState>,
-) -> String {
-    if let Some(conflict) = conflict
-        && !conflict.hunks.is_empty()
-    {
-        return format!(
-            "Preview [conflict {}/{}]",
-            selected_conflict_hunk + 1,
-            conflict.hunks.len()
-        );
-    }
-    "Preview".into()
-}
-
 fn styled_preview_line(
     line: &str,
     width: u16,
@@ -3069,6 +3058,7 @@ mod tests {
         Event, KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers, MouseButton,
         MouseEvent, MouseEventKind,
     };
+    use crate::ui::docs;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use ratatui::style::Modifier;
@@ -3080,7 +3070,7 @@ mod tests {
     use super::{
         App, InputEvent, PaneFocus, ThemeChoice, centered_popup, clamp_scroll, code_open_before,
         cursor_rect, docs_modal_rect, mode_label, next_pressed_key, next_terminal_input,
-        onboarding_marker_path, pane_border_style, preview_title, preview_title_with_scroll,
+        onboarding_marker_path, pane_border_style, preview_title_with_scroll,
         scroll_indicator_bar, status_style, styled_editor_lines, styled_preview_line, to_lines,
         toggle_raw_mode,
     };
@@ -3427,6 +3417,244 @@ mod tests {
         )
         .expect("quit replace mode");
         assert!(!running3);
+
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn help_overlay_navigation_and_onboarding_keys_work() {
+        let mut app = App::new_stream_for_test(false);
+        app.open_docs_modal();
+        app.help_page_lines = 3;
+        app.ui.help.section_idx = 2;
+        let mut running = true;
+
+        app.handle_key(key(KeyCode::Up, KeyModifiers::NONE), &mut running)
+            .expect("help up");
+        assert_eq!(app.ui.help.section_idx, 1);
+
+        app.handle_key(key(KeyCode::Down, KeyModifiers::NONE), &mut running)
+            .expect("help down");
+        assert_eq!(app.ui.help.section_idx, 2);
+
+        app.handle_key(key(KeyCode::Right, KeyModifiers::NONE), &mut running)
+            .expect("focus right");
+        assert!(!app.ui.help.index_focus);
+
+        app.handle_key(key(KeyCode::PageDown, KeyModifiers::NONE), &mut running)
+            .expect("page down");
+        assert!(app.ui.help.scroll > 0);
+
+        app.handle_key(key(KeyCode::End, KeyModifiers::NONE), &mut running)
+            .expect("end");
+        assert!(app.ui.help.scroll >= app.help_page_lines);
+
+        app.handle_key(key(KeyCode::Home, KeyModifiers::NONE), &mut running)
+            .expect("home");
+        assert_eq!(app.ui.help.scroll, 0);
+
+        app.handle_key(key(KeyCode::Left, KeyModifiers::NONE), &mut running)
+            .expect("focus left");
+        assert!(app.ui.help.index_focus);
+
+        app.handle_key(key(KeyCode::Tab, KeyModifiers::NONE), &mut running)
+            .expect("tab focus");
+        assert!(!app.ui.help.index_focus);
+
+        app.ui.help.index_focus = true;
+        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE), &mut running)
+            .expect("open section");
+        assert!(!app.ui.help.index_focus);
+
+        app.handle_key(key(KeyCode::Esc, KeyModifiers::NONE), &mut running)
+            .expect("close docs");
+        assert!(!app.ui.help.open);
+        assert_eq!(app.status, "Docs closed");
+
+        app.open_docs_modal();
+        let mut quit_running = true;
+        app.handle_key(key(KeyCode::Char('q'), KeyModifiers::CONTROL), &mut quit_running)
+            .expect("quit docs");
+        assert!(!quit_running);
+
+        let mut home = App::new_home_for_test(false, false, false);
+        home.ui.help.open_onboarding();
+        home.ui.help.index_focus = false;
+        let mut onboarding_running = true;
+        home.handle_key(key(KeyCode::Enter, KeyModifiers::NONE), &mut onboarding_running)
+            .expect("advance onboarding");
+        assert_eq!(home.ui.help.onboarding_step, Some(1));
+
+        home.ui.help.section_idx = docs::section_count(docs::onboarding_catalog()) - 1;
+        home.ui.help.onboarding_step = Some(docs::section_count(docs::onboarding_catalog()) - 1);
+        home.handle_key(key(KeyCode::Enter, KeyModifiers::NONE), &mut onboarding_running)
+            .expect("finish onboarding");
+        assert!(!home.ui.help.open);
+        assert_eq!(home.status, "Onboarding complete");
+    }
+
+    #[test]
+    fn handle_key_prompt_backspace_empty_and_cancel_paths() {
+        let path = temp_path("prompt-branches");
+        fs::write(&path, "alpha\n\nbeta").expect("seed");
+        let mut app =
+            App::new_file(path.clone(), false, false, false, "alpha\n\nbeta".into()).expect("app");
+        app.interactive_input = false;
+        let mut running = true;
+
+        app.handle_key(key(KeyCode::Char('f'), KeyModifiers::CONTROL), &mut running)
+            .expect("search start");
+        app.handle_key(key(KeyCode::Backspace, KeyModifiers::NONE), &mut running)
+            .expect("search backspace");
+        assert_eq!(app.status, "Search: ");
+        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE), &mut running)
+            .expect("search empty");
+        assert_eq!(app.status, "Search query empty");
+
+        app.handle_key(key(KeyCode::Char('f'), KeyModifiers::CONTROL), &mut running)
+            .expect("search start 2");
+        app.handle_key(key(KeyCode::Esc, KeyModifiers::NONE), &mut running)
+            .expect("search cancel");
+        assert_eq!(app.status, "Search cancelled");
+
+        app.handle_key(key(KeyCode::Char('g'), KeyModifiers::CONTROL), &mut running)
+            .expect("goto start");
+        app.handle_key(key(KeyCode::Backspace, KeyModifiers::NONE), &mut running)
+            .expect("goto backspace");
+        assert_eq!(app.status, "Goto: ");
+        app.goto_query = "oops".into();
+        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE), &mut running)
+            .expect("goto invalid");
+        assert_eq!(app.status, "Line out of range: oops");
+
+        app.handle_key(key(KeyCode::Char('g'), KeyModifiers::CONTROL), &mut running)
+            .expect("goto start 2");
+        app.handle_key(key(KeyCode::Esc, KeyModifiers::NONE), &mut running)
+            .expect("goto cancel");
+        assert_eq!(app.status, "Goto cancelled");
+
+        app.handle_key(key(KeyCode::Char('h'), KeyModifiers::CONTROL), &mut running)
+            .expect("replace start");
+        app.handle_key(key(KeyCode::Backspace, KeyModifiers::NONE), &mut running)
+            .expect("replace find backspace");
+        assert_eq!(app.status, "Replace find: ");
+        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE), &mut running)
+            .expect("replace empty");
+        assert_eq!(app.status, "Replace query empty");
+
+        app.handle_key(key(KeyCode::Char('h'), KeyModifiers::CONTROL), &mut running)
+            .expect("replace start 2");
+        app.handle_key(key(KeyCode::Char('a'), KeyModifiers::NONE), &mut running)
+            .expect("replace find char");
+        app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE), &mut running)
+            .expect("replace to with");
+        app.handle_key(key(KeyCode::Backspace, KeyModifiers::NONE), &mut running)
+            .expect("replace with backspace");
+        assert_eq!(app.status, "Replace with: ");
+        app.handle_key(key(KeyCode::Esc, KeyModifiers::NONE), &mut running)
+            .expect("replace cancel");
+        assert_eq!(app.status, "Replace cancelled");
+
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn handle_key_navigation_and_status_fallbacks_cover_remaining_paths() {
+        let path = temp_path("nav-branches");
+        fs::write(&path, "one two\n\nthree four").expect("seed");
+        let mut app = App::new_file(
+            path.clone(),
+            false,
+            false,
+            false,
+            "one two\n\nthree four".into(),
+        )
+        .expect("app");
+        app.interactive_input = false;
+        app.editor_height = 2;
+        app.preview_height = 2;
+        let mut running = true;
+
+        app.handle_key(key(KeyCode::Char('z'), KeyModifiers::CONTROL), &mut running)
+            .expect("undo empty");
+        assert_eq!(app.status, "Nothing to undo");
+        app.handle_key(key(KeyCode::Char('y'), KeyModifiers::CONTROL), &mut running)
+            .expect("redo empty");
+        assert_eq!(app.status, "Nothing to redo");
+        app.handle_key(
+            key(KeyCode::Char('z'), KeyModifiers::SUPER | KeyModifiers::SHIFT),
+            &mut running,
+        )
+        .expect("redo super shift");
+        assert_eq!(app.status, "Nothing to redo");
+
+        app.handle_key(key(KeyCode::Char('m'), KeyModifiers::CONTROL), &mut running)
+            .expect("merge empty");
+        assert_eq!(app.status, "No conflict to merge");
+
+        app.ui.focus = PaneFocus::Preview;
+        app.preview_scroll = 3;
+        app.handle_key(key(KeyCode::PageUp, KeyModifiers::NONE), &mut running)
+            .expect("preview page up");
+        assert_eq!(app.preview_scroll, 1);
+        app.handle_key(key(KeyCode::PageDown, KeyModifiers::NONE), &mut running)
+            .expect("preview page down");
+        assert_eq!(app.preview_scroll, 3);
+
+        app.ui.focus = PaneFocus::Editor;
+        app.editor.set_cursor(app.editor.text().len());
+        app.handle_key(key(KeyCode::Up, KeyModifiers::ALT), &mut running)
+            .expect("paragraph up");
+        let paragraph_cursor = app.editor.cursor();
+        assert!(paragraph_cursor < app.editor.text().len());
+        app.handle_key(key(KeyCode::Down, KeyModifiers::CONTROL), &mut running)
+            .expect("paragraph down");
+        assert!(app.editor.cursor() > paragraph_cursor);
+
+        app.handle_key(key(KeyCode::Left, KeyModifiers::SUPER), &mut running)
+            .expect("line start super");
+        assert_eq!(app.editor.line_col_at_cursor().1, 0);
+        app.handle_key(key(KeyCode::Right, KeyModifiers::SUPER), &mut running)
+            .expect("line end super");
+        assert_eq!(app.editor.line_col_at_cursor(), (2, 10));
+        app.handle_key(key(KeyCode::Home, KeyModifiers::NONE), &mut running)
+            .expect("home");
+        assert_eq!(app.editor.line_col_at_cursor().1, 0);
+        app.handle_key(key(KeyCode::End, KeyModifiers::NONE), &mut running)
+            .expect("end");
+        assert_eq!(app.editor.line_col_at_cursor(), (2, 10));
+
+        let mut edit_app =
+            App::new_file(path.clone(), false, false, false, "abc def".into()).expect("edit app");
+        edit_app.interactive_input = false;
+        edit_app.editor.set_cursor(0);
+        edit_app.handle_key(key(KeyCode::Delete, KeyModifiers::CONTROL), &mut running)
+            .expect("delete word forward");
+        assert_eq!(edit_app.editor.text(), " def");
+        edit_app.handle_key(key(KeyCode::Delete, KeyModifiers::NONE), &mut running)
+            .expect("delete forward");
+        assert_eq!(edit_app.editor.text(), "def");
+        edit_app.editor.set_cursor(edit_app.editor.text().len());
+        edit_app.handle_key(key(KeyCode::Backspace, KeyModifiers::SUPER), &mut running)
+            .expect("delete to line start");
+        assert_eq!(edit_app.editor.text(), "");
+
+        let mut word_back =
+            App::new_file(path.clone(), false, false, false, "abc def".into()).expect("word back");
+        word_back.interactive_input = false;
+        word_back.editor.set_cursor(word_back.editor.text().len());
+        word_back
+            .handle_key(key(KeyCode::Backspace, KeyModifiers::ALT), &mut running)
+            .expect("delete word back");
+        assert_eq!(word_back.editor.text(), "abc ");
+
+        let mut readonly =
+            App::new_file(path.clone(), true, false, false, "abc".into()).expect("readonly");
+        readonly.interactive_input = false;
+        readonly
+            .handle_key(key(KeyCode::Char('k'), KeyModifiers::CONTROL), &mut running)
+            .expect("readonly ctrl-k");
+        assert_eq!(readonly.status, "Readonly: edit disabled");
 
         let _ = fs::remove_file(&path);
     }
@@ -4900,9 +5128,9 @@ mod tests {
         assert!(info.contains("mode=conflict"));
         assert!(info.contains("view=editor"));
 
-        let title = preview_title(0, app.editor.conflict());
+        let title = preview_title_with_scroll(0, app.editor.conflict(), 1, 0, 10);
         assert!(title.contains("Preview [conflict 1/"));
-        assert_eq!(preview_title(0, None), "Preview");
+        assert_eq!(preview_title_with_scroll(0, None, 1, 0, 10), "Preview");
 
         let theme = build_theme(ThemeChoice::Default, false);
         assert_eq!(pane_border_style(&theme, true).fg, theme.pane_focus.fg);

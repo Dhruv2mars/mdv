@@ -289,4 +289,54 @@ mod tests {
         assert_eq!(lines[2].spans[0].style.fg, theme.quote.fg);
         assert_eq!(lines[3].spans[1].style.fg, theme.code.fg);
     }
+
+    #[test]
+    fn renderer_supports_code_fences_ordered_lists_and_empty_sections() {
+        let theme = build_theme(ThemeChoice::Default, false);
+        let section = super::DocSection {
+            id: "t2",
+            title: "t2",
+            body: "## Subhead\n\n```rust\nfn main() {}\n```\n12. ordered\nword `",
+        };
+
+        let lines = render_section(&section, &theme);
+        assert_eq!(lines[0].spans[0].content.as_ref(), "Subhead");
+        assert!(lines[1].spans[0].content.is_empty());
+        assert_eq!(lines[2].spans[0].content.as_ref(), "```rust");
+        assert_eq!(lines[2].spans[0].style.fg, theme.code.fg);
+        assert_eq!(lines[3].spans[0].content.as_ref(), "fn main() {}");
+        assert_eq!(lines[3].spans[0].style.fg, theme.code.fg);
+        assert_eq!(lines[4].spans[0].content.as_ref(), "```");
+        assert_eq!(lines[5].spans[0].content.as_ref(), "12. ");
+        assert_eq!(lines[5].spans[1].content.as_ref(), "ordered");
+        assert_eq!(lines[6].spans[0].content.as_ref(), "word ");
+        assert_eq!(lines[6].spans[0].style.fg, theme.plain.fg);
+
+        let non_bullet = super::DocSection {
+            id: "t3",
+            title: "t3",
+            body: "abc. not ordered",
+        };
+        let non_bullet_lines = render_section(&non_bullet, &theme);
+        assert_eq!(non_bullet_lines[0].spans[0].content.as_ref(), "abc. not ordered");
+
+        let empty = super::DocSection {
+            id: "empty",
+            title: "empty",
+            body: "",
+        };
+        let empty_lines = render_section(&empty, &theme);
+        assert_eq!(empty_lines.len(), 1);
+        assert!(empty_lines[0].spans[0].content.is_empty());
+
+        let leading_plain = super::inline_code_spans("word `", theme.plain, theme.code);
+        assert_eq!(leading_plain.len(), 1);
+        assert_eq!(leading_plain[0].content.as_ref(), "word ");
+        assert_eq!(leading_plain[0].style.fg, theme.plain.fg);
+
+        let empty_inline = super::inline_code_spans("`", theme.plain, theme.code);
+        assert_eq!(empty_inline.len(), 1);
+        assert!(empty_inline[0].content.is_empty());
+        assert_eq!(empty_inline[0].style.fg, theme.plain.fg);
+    }
 }
