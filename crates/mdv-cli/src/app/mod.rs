@@ -3054,11 +3054,11 @@ mod tests {
     use std::sync::{Mutex, mpsc};
     use std::time::{SystemTime, UNIX_EPOCH};
 
+    use crate::ui::docs;
     use crossterm::event::{
         Event, KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers, MouseButton,
         MouseEvent, MouseEventKind,
     };
-    use crate::ui::docs;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use ratatui::style::Modifier;
@@ -3070,9 +3070,8 @@ mod tests {
     use super::{
         App, InputEvent, PaneFocus, ThemeChoice, centered_popup, clamp_scroll, code_open_before,
         cursor_rect, docs_modal_rect, mode_label, next_pressed_key, next_terminal_input,
-        onboarding_marker_path, pane_border_style, preview_title_with_scroll,
-        scroll_indicator_bar, status_style, styled_editor_lines, styled_preview_line, to_lines,
-        toggle_raw_mode,
+        onboarding_marker_path, pane_border_style, preview_title_with_scroll, scroll_indicator_bar,
+        status_style, styled_editor_lines, styled_preview_line, to_lines, toggle_raw_mode,
     };
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
@@ -3473,22 +3472,31 @@ mod tests {
 
         app.open_docs_modal();
         let mut quit_running = true;
-        app.handle_key(key(KeyCode::Char('q'), KeyModifiers::CONTROL), &mut quit_running)
-            .expect("quit docs");
+        app.handle_key(
+            key(KeyCode::Char('q'), KeyModifiers::CONTROL),
+            &mut quit_running,
+        )
+        .expect("quit docs");
         assert!(!quit_running);
 
         let mut home = App::new_home_for_test(false, false, false);
         home.ui.help.open_onboarding();
         home.ui.help.index_focus = false;
         let mut onboarding_running = true;
-        home.handle_key(key(KeyCode::Enter, KeyModifiers::NONE), &mut onboarding_running)
-            .expect("advance onboarding");
+        home.handle_key(
+            key(KeyCode::Enter, KeyModifiers::NONE),
+            &mut onboarding_running,
+        )
+        .expect("advance onboarding");
         assert_eq!(home.ui.help.onboarding_step, Some(1));
 
         home.ui.help.section_idx = docs::section_count(docs::onboarding_catalog()) - 1;
         home.ui.help.onboarding_step = Some(docs::section_count(docs::onboarding_catalog()) - 1);
-        home.handle_key(key(KeyCode::Enter, KeyModifiers::NONE), &mut onboarding_running)
-            .expect("finish onboarding");
+        home.handle_key(
+            key(KeyCode::Enter, KeyModifiers::NONE),
+            &mut onboarding_running,
+        )
+        .expect("finish onboarding");
         assert!(!home.ui.help.open);
         assert_eq!(home.status, "Onboarding complete");
     }
@@ -3582,7 +3590,10 @@ mod tests {
             .expect("redo empty");
         assert_eq!(app.status, "Nothing to redo");
         app.handle_key(
-            key(KeyCode::Char('z'), KeyModifiers::SUPER | KeyModifiers::SHIFT),
+            key(
+                KeyCode::Char('z'),
+                KeyModifiers::SUPER | KeyModifiers::SHIFT,
+            ),
             &mut running,
         )
         .expect("redo super shift");
@@ -3628,14 +3639,17 @@ mod tests {
             App::new_file(path.clone(), false, false, false, "abc def".into()).expect("edit app");
         edit_app.interactive_input = false;
         edit_app.editor.set_cursor(0);
-        edit_app.handle_key(key(KeyCode::Delete, KeyModifiers::CONTROL), &mut running)
+        edit_app
+            .handle_key(key(KeyCode::Delete, KeyModifiers::CONTROL), &mut running)
             .expect("delete word forward");
         assert_eq!(edit_app.editor.text(), " def");
-        edit_app.handle_key(key(KeyCode::Delete, KeyModifiers::NONE), &mut running)
+        edit_app
+            .handle_key(key(KeyCode::Delete, KeyModifiers::NONE), &mut running)
             .expect("delete forward");
         assert_eq!(edit_app.editor.text(), "def");
         edit_app.editor.set_cursor(edit_app.editor.text().len());
-        edit_app.handle_key(key(KeyCode::Backspace, KeyModifiers::SUPER), &mut running)
+        edit_app
+            .handle_key(key(KeyCode::Backspace, KeyModifiers::SUPER), &mut running)
             .expect("delete to line start");
         assert_eq!(edit_app.editor.text(), "");
 
