@@ -271,6 +271,21 @@ mod tests {
     }
 
     #[test]
+    fn selection_docs_do_not_reuse_ctrl_backspace_for_two_actions() {
+        let docs = user_docs_catalog();
+        let selection = docs
+            .sections
+            .iter()
+            .find(|section| section.id == "selection")
+            .expect("selection section");
+
+        assert!(selection.body.contains("Ctrl+Backspace"));
+        assert!(!selection.body.contains(
+            "Delete to line start: `Cmd+Backspace` (macOS) / `Ctrl+Backspace` (Windows/Linux)"
+        ));
+    }
+
+    #[test]
     fn renderer_supports_heading_bullet_callout_and_inline_code() {
         let theme = build_theme(ThemeChoice::Default, false);
         let section = super::DocSection {
