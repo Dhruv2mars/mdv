@@ -19,10 +19,10 @@ use crossterm::event::{
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
-use mdv_core::{EditorBuffer, SegmentKind, render_preview_lines, render_preview_segments};
+use mdv_core::{EditorBuffer, SegmentKind, render_preview_lines};
 use ratatui::backend::{Backend, CrosstermBackend};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Modifier, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use ratatui::{Frame, Terminal};
@@ -32,7 +32,7 @@ use crate::stream;
 use crate::stream::StreamMessage;
 use crate::ui::docs;
 use crate::ui::layout::{LayoutKind, compute_pane_layout};
-use crate::ui::render::{compose_status, truncate_middle};
+use crate::ui::render::{StatusBarConfig, build_status_bar, compose_status, truncate_middle};
 use crate::ui::theme::{ThemeTokens, build_theme, style_for_segment};
 use crate::watcher::{self, WatchMessage};
 use action::Action;
@@ -731,7 +731,9 @@ impl App {
                         page_lines,
                     )
                 }
-                (KeyCode::Enter, _) if self.ui.help.is_onboarding() && !self.ui.help.index_focus => {
+                (KeyCode::Enter, _)
+                    if self.ui.help.is_onboarding() && !self.ui.help.index_focus =>
+                {
                     self.advance_onboarding_step();
                 }
                 (KeyCode::Enter, _) => apply_help_nav(
@@ -1942,7 +1944,11 @@ impl App {
         let body = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
-                Constraint::Length((inner.width / 3).max(22).min(inner.width.saturating_sub(10))),
+                Constraint::Length(
+                    (inner.width / 3)
+                        .max(22)
+                        .min(inner.width.saturating_sub(10)),
+                ),
                 Constraint::Min(8),
             ])
             .split(rows[1]);
@@ -1952,7 +1958,11 @@ impl App {
         if section_count == 0 {
             return;
         }
-        self.ui.help.section_idx = self.ui.help.section_idx.min(section_count.saturating_sub(1));
+        self.ui.help.section_idx = self
+            .ui
+            .help
+            .section_idx
+            .min(section_count.saturating_sub(1));
         let section = docs::section(catalog, self.ui.help.section_idx);
         let lines = docs::render_section(&section, theme);
         self.help_page_lines = body[1].height.max(1) as usize;
@@ -2004,7 +2014,9 @@ impl App {
             .skip(self.ui.help.scroll)
             .take(self.help_page_lines.max(1))
             .collect::<Vec<_>>();
-        let content = Paragraph::new(content_visible).style(theme.help).wrap(Wrap { trim: false });
+        let content = Paragraph::new(content_visible)
+            .style(theme.help)
+            .wrap(Wrap { trim: false });
         frame.render_widget(content, body[1]);
 
         let hint = if self.ui.help.is_onboarding() {
@@ -2033,7 +2045,6 @@ impl App {
         frame.render_widget(Paragraph::new(info).style(theme.top_bar), vertical[0]);
 
         let pane_layout = compute_pane_layout(vertical[1], self.ui.focus);
-        let compact = pane_layout.kind == LayoutKind::Compact;
         self.editor_area = pane_layout.editor;
         self.preview_area = pane_layout.preview;
         self.editor_text_area = Rect::default();
@@ -2048,6 +2059,8 @@ impl App {
                 let editor_lines = to_lines(self.editor.text());
                 self.editor_scroll =
                     clamp_scroll(self.editor_scroll, editor_lines.len(), self.editor_height);
+                let (current_line, _) = self.editor.line_col_at_cursor();
+                let gutter_width = line_number_gutter_width(editor_lines.len());
                 let editor_visible = styled_editor_lines(
                     self.editor.text(),
                     self.editor_scroll,
@@ -2055,13 +2068,29 @@ impl App {
                     self.selection_range(),
                     pane_layout.editor.width.saturating_sub(2),
                     &theme,
+                    current_line,
+                );
+
+                // Update editor text area to account for gutter
+                self.editor_text_area = Rect {
+                    x: pane_layout.editor.x + 1 + gutter_width,
+                    y: pane_layout.editor.y + 1,
+                    width: pane_layout.editor.width.saturating_sub(2 + gutter_width),
+                    height: pane_layout.editor.height.saturating_sub(2),
+                };
+
+                // Build editor title with scroll indicator
+                let editor_title = editor_title_with_scroll(
+                    editor_lines.len(),
+                    self.editor_scroll,
+                    self.editor_height,
                 );
 
                 let editor_border = pane_border_style(&theme, self.ui.focus == PaneFocus::Editor);
                 let editor = Paragraph::new(editor_visible).block(
                     Block::default()
                         .borders(Borders::ALL)
-                        .title("Editor")
+                        .title(editor_title)
                         .border_style(editor_border),
                 );
                 frame.render_widget(editor, pane_layout.editor);
@@ -2094,8 +2123,15 @@ impl App {
                     .map(|line| styled_preview_line(line, preview_width, &theme, &mut in_code))
                     .collect::<Vec<_>>();
 
-                let preview_title =
-                    preview_title(self.selected_conflict_hunk, self.editor.conflict());
+                // Build preview title with scroll indicator and conflict info
+                let preview_title = preview_title_with_scroll(
+                    self.selected_conflict_hunk,
+                    self.editor.conflict(),
+                    preview_lines.len(),
+                    self.preview_scroll,
+                    self.preview_height,
+                );
+
                 let preview_border = pane_border_style(&theme, self.ui.focus == PaneFocus::Preview);
                 let preview = Paragraph::new(preview_visible)
                     .block(
@@ -2109,26 +2145,83 @@ impl App {
             }
         }
 
-        let mut base_status = status_line(
-            &self.status,
-            self.perf_mode,
-            self.draw_time_us,
-            self.watch_event_count,
-            self.stream_event_count,
-        );
-        if compact {
-            base_status = format!("compact terminal (<80x24) | {base_status}");
+        // Build the styled status bar
+        let (line, col) = self.editor.line_col_at_cursor();
+        let total_lines = self.editor.text().lines().count().max(1);
+        let scroll_percent = if total_lines <= 1 {
+            100
+        } else {
+            ((self.editor_scroll as f64 / (total_lines.saturating_sub(1)) as f64) * 100.0)
+                .min(100.0) as u8
+        };
+
+        let filename = self
+            .path
+            .as_ref()
+            .map(|p| {
+                p.file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| p.display().to_string())
+            })
+            .unwrap_or_else(|| {
+                if self.home_mode {
+                    "<home>".into()
+                } else if self.stream_mode {
+                    "<stdin>".into()
+                } else {
+                    "<new>".into()
+                }
+            });
+
+        let mode = mode_label(self);
+        let is_error = self.status.contains("error") || self.status.contains("Error");
+        let is_warning = self.editor.is_conflicted() || self.status.contains("conflict");
+
+        // For compact layout, use simple status bar
+        if pane_layout.kind == LayoutKind::Compact {
+            let base_status = format!("compact | {}", self.status);
+            let right_hint = self.status_hint();
+            let status_text = compose_status(&base_status, &right_hint, vertical[2].width as usize);
+            frame.render_widget(
+                Paragraph::new(status_text).style(status_style(
+                    &theme,
+                    self.editor.is_conflicted(),
+                    &self.status,
+                )),
+                vertical[2],
+            );
+        } else {
+            // Use rich styled status bar for normal/split layouts
+            let mut message = self.status.clone();
+            if self.perf_mode {
+                message = format!(
+                    "{} | draw={}us watch={} stream={}",
+                    message, self.draw_time_us, self.watch_event_count, self.stream_event_count
+                );
+            }
+
+            let status_config = StatusBarConfig {
+                mode,
+                filename: &filename,
+                dirty: self.editor.dirty,
+                readonly: self.readonly,
+                line,
+                col,
+                total_lines,
+                scroll_percent,
+                message: &message,
+                hint: &self.status_hint(),
+                is_error,
+                is_warning,
+                width: vertical[2].width as usize,
+            };
+
+            let status_line = build_status_bar(&status_config, &theme);
+            frame.render_widget(
+                Paragraph::new(status_line).style(theme.status_bg),
+                vertical[2],
+            );
         }
-        let right_hint = self.status_hint();
-        let status_text = compose_status(&base_status, &right_hint, vertical[2].width as usize);
-        frame.render_widget(
-            Paragraph::new(status_text).style(status_style(
-                &theme,
-                self.editor.is_conflicted(),
-                &self.status,
-            )),
-            vertical[2],
-        );
 
         if self.ui.help.open {
             self.draw_docs_modal(frame, area, &theme);
@@ -2136,27 +2229,29 @@ impl App {
 
         if !self.ui.help.open {
             if self.home_mode {
-                let popup = centered_popup(72, 12, vertical[1]);
+                let popup = centered_popup(60, 16, vertical[1]);
                 if popup.width > 10 && popup.height > 7 {
+                    // Cursor position: "  Path: " is 8 chars, on row 7 (0-indexed: 6)
                     let x = popup
                         .x
                         .saturating_add(1)
-                        .saturating_add(6)
+                        .saturating_add(8)
                         .saturating_add(self.home_query.chars().count() as u16)
                         .min(popup.x + popup.width.saturating_sub(2));
-                    let y = popup.y + 5;
+                    let y = popup.y + 7;
                     frame.set_cursor_position((x, y));
                 }
             } else if !self.readonly
                 && self.ui.focus == PaneFocus::Editor
                 && pane_layout.editor.width > 0
             {
-                let cursor = cursor_rect(pane_layout.editor);
+                let cursor_area = self.editor_text_area;
                 let (line, col) = self.editor.line_col_at_cursor();
                 let visible_line = line.saturating_sub(self.editor_scroll) as u16;
-                if visible_line < cursor.height {
-                    let x = (cursor.x + col as u16).min(cursor.x + cursor.width.saturating_sub(1));
-                    let y = cursor.y + visible_line;
+                if visible_line < cursor_area.height {
+                    let x = (cursor_area.x + col as u16)
+                        .min(cursor_area.x + cursor_area.width.saturating_sub(1));
+                    let y = cursor_area.y + visible_line;
                     frame.set_cursor_position((x, y));
                 }
             }
@@ -2164,22 +2259,70 @@ impl App {
     }
 
     fn draw_home(&mut self, frame: &mut Frame<'_>, area: Rect, theme: &ThemeTokens) {
-        let popup = centered_popup(72, 12, area);
+        let popup = centered_popup(60, 16, area);
         frame.render_widget(Clear, popup);
+
+        // ASCII art logo
+        let logo_style = theme.heading;
+        let subtitle_style = theme.help;
+        let input_label_style = theme.list_bullet;
+        let input_style = theme.plain;
+        let hint_style = Style::default().fg(Color::Rgb(92, 99, 112));
+        let key_style = theme.code;
+
         let lines = vec![
-            Line::from(Span::styled("mdv", theme.heading)),
-            Line::from("Terminal-first markdown visualizer/editor"),
             Line::from(""),
-            Line::from(Span::styled("Open Markdown File", theme.heading)),
-            Line::from(format!("Path: {}", self.home_query)),
+            Line::from(vec![
+                Span::styled("  m", logo_style),
+                Span::styled("arkdown ", subtitle_style),
+                Span::styled("v", logo_style),
+                Span::styled("iewer", subtitle_style),
+            ]),
+            Line::from(Span::styled(
+                "  Terminal-first editor & previewer",
+                hint_style,
+            )),
             Line::from(""),
-            Line::from("Enter open | Cmd+,/Ctrl+, docs | Ctrl+Q quit"),
-            Line::from("Tip: Use --focus view to start in preview mode"),
+            Line::from(Span::styled(
+                "  ─────────────────────────────────────",
+                hint_style,
+            )),
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("  Path: ", input_label_style),
+                Span::styled(
+                    if self.home_query.is_empty() {
+                        "Enter file path..."
+                    } else {
+                        &self.home_query
+                    },
+                    if self.home_query.is_empty() {
+                        hint_style
+                    } else {
+                        input_style
+                    },
+                ),
+            ]),
+            Line::from(""),
+            Line::from(Span::styled(
+                "  ─────────────────────────────────────",
+                hint_style,
+            )),
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("  Enter", key_style),
+                Span::styled(" open  ", hint_style),
+                Span::styled("Ctrl+,", key_style),
+                Span::styled(" docs  ", hint_style),
+                Span::styled("Ctrl+Q", key_style),
+                Span::styled(" quit", hint_style),
+            ]),
+            Line::from(""),
         ];
+
         let home = Paragraph::new(lines).block(
             Block::default()
                 .borders(Borders::ALL)
-                .title("Home")
                 .border_style(theme.pane_focus),
         );
         frame.render_widget(home, popup);
@@ -2247,22 +2390,6 @@ impl App {
     }
 }
 
-fn status_line(
-    base: &str,
-    perf_mode: bool,
-    draw_time_us: u128,
-    watch_events: u64,
-    stream_events: u64,
-) -> String {
-    if !perf_mode {
-        return base.to_string();
-    }
-
-    format!(
-        "{base} | perf draw={draw_time_us}us watch_events={watch_events} stream_events={stream_events}"
-    )
-}
-
 fn mode_label(app: &App) -> &'static str {
     if app.home_mode {
         "home"
@@ -2299,6 +2426,73 @@ fn status_style(theme: &ThemeTokens, conflicted: bool, status: &str) -> Style {
     theme.status_ok
 }
 
+/// Generate a scroll indicator string like "━━━━━━━━━░░" representing scroll position
+fn scroll_indicator_bar(total_lines: usize, scroll: usize, visible_height: usize) -> String {
+    const BAR_WIDTH: usize = 8;
+
+    if total_lines <= visible_height {
+        return "────────".to_string();
+    }
+
+    let scrollable_lines = total_lines.saturating_sub(visible_height);
+    let scroll_ratio = if scrollable_lines > 0 {
+        (scroll as f64 / scrollable_lines as f64).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+
+    // Calculate thumb position and size
+    let visible_ratio = (visible_height as f64 / total_lines as f64).clamp(0.1, 1.0);
+    let thumb_size = ((BAR_WIDTH as f64) * visible_ratio).ceil().max(1.0) as usize;
+    let thumb_start = ((BAR_WIDTH - thumb_size) as f64 * scroll_ratio).round() as usize;
+
+    let mut bar = String::new();
+    for i in 0..BAR_WIDTH {
+        if i >= thumb_start && i < thumb_start + thumb_size {
+            bar.push('━');
+        } else {
+            bar.push('─');
+        }
+    }
+    bar
+}
+
+fn editor_title_with_scroll(total_lines: usize, scroll: usize, visible_height: usize) -> String {
+    if total_lines <= visible_height {
+        "Editor".into()
+    } else {
+        let bar = scroll_indicator_bar(total_lines, scroll, visible_height);
+        format!("Editor {}", bar)
+    }
+}
+
+fn preview_title_with_scroll(
+    selected_conflict_hunk: usize,
+    conflict: Option<&mdv_core::ConflictState>,
+    total_lines: usize,
+    scroll: usize,
+    visible_height: usize,
+) -> String {
+    let base = if let Some(conflict) = conflict
+        && !conflict.hunks.is_empty()
+    {
+        format!(
+            "Preview [conflict {}/{}]",
+            selected_conflict_hunk + 1,
+            conflict.hunks.len()
+        )
+    } else {
+        "Preview".into()
+    };
+
+    if total_lines <= visible_height {
+        base
+    } else {
+        let bar = scroll_indicator_bar(total_lines, scroll, visible_height);
+        format!("{} {}", base, bar)
+    }
+}
+
 fn preview_title(
     selected_conflict_hunk: usize,
     conflict: Option<&mdv_core::ConflictState>,
@@ -2321,6 +2515,7 @@ fn styled_preview_line(
     theme: &ThemeTokens,
     in_code_block: &mut bool,
 ) -> Line<'static> {
+    // Handle code block fences
     if line.trim_start().starts_with("```") || line.trim() == "$$" {
         *in_code_block = !*in_code_block;
         return Line::from(Span::styled(
@@ -2335,47 +2530,240 @@ fn styled_preview_line(
         ));
     }
 
-    let kind = if line.contains("Local block") {
-        SegmentKind::ConflictLocal
-    } else if line.contains("External block") {
-        SegmentKind::ConflictExternal
-    } else {
-        render_preview_segments(line, width)
-            .first()
-            .and_then(|l| l.segments.first())
-            .map(|s| s.kind)
-            .unwrap_or(SegmentKind::Plain)
-    };
-
-    if kind == SegmentKind::ListBullet {
-        let (bullet, rest) = if let Some(stripped) = line.strip_prefix("- ") {
-            ("- ".to_string(), stripped.to_string())
-        } else {
-            match line.split_once(". ") {
-                Some((lhs, rhs)) if lhs.chars().all(|c| c.is_ascii_digit()) => {
-                    (format!("{lhs}. "), rhs.to_string())
-                }
-                _ => (line.to_string(), String::new()),
-            }
-        };
-        let mut spans = Vec::new();
-        spans.push(Span::styled(
-            bullet,
-            style_for_segment(theme, SegmentKind::ListBullet),
+    // Conflict markers
+    if line.contains("Local block") {
+        return Line::from(Span::styled(
+            line.to_string(),
+            style_for_segment(theme, SegmentKind::ConflictLocal),
         ));
-        if !rest.is_empty() {
-            spans.push(Span::styled(
-                rest,
-                style_for_segment(theme, SegmentKind::Plain),
-            ));
+    }
+    if line.contains("External block") {
+        return Line::from(Span::styled(
+            line.to_string(),
+            style_for_segment(theme, SegmentKind::ConflictExternal),
+        ));
+    }
+
+    // Horizontal rule
+    let trimmed = line.trim();
+    if trimmed == "---" || trimmed == "***" || trimmed == "___" {
+        let hr_char = "─".repeat(width.saturating_sub(2) as usize);
+        return Line::from(Span::styled(hr_char, theme.hr));
+    }
+
+    // Headings (# Heading)
+    if trimmed.starts_with('#') {
+        let level = trimmed.chars().take_while(|&c| c == '#').count();
+        if level <= 6 && trimmed.chars().nth(level) == Some(' ') {
+            let prefix = "#".repeat(level);
+            let content = trimmed[level..].trim_start();
+            return Line::from(vec![
+                Span::styled(format!("{} ", prefix), theme.heading),
+                Span::styled(content.to_string(), theme.heading),
+            ]);
         }
+    }
+
+    // Block quotes (> text)
+    if trimmed.starts_with('>') {
+        let quote_depth = trimmed
+            .chars()
+            .take_while(|&c| c == '>' || c == ' ')
+            .count();
+        let content = &trimmed[quote_depth.min(trimmed.len())..];
+        let prefix = "> ".repeat(quote_depth.div_ceil(2));
+        return Line::from(vec![
+            Span::styled(prefix, theme.quote),
+            Span::styled(content.to_string(), theme.quote),
+        ]);
+    }
+
+    // Task lists
+    if let Some(stripped) = trimmed
+        .strip_prefix("- [x]")
+        .or_else(|| trimmed.strip_prefix("- [X]"))
+    {
+        let content = stripped.trim_start();
+        return Line::from(vec![
+            Span::styled("  ", theme.plain),
+            Span::styled(" ", theme.task_done),
+            Span::styled(format!(" {}", content), theme.strikethrough),
+        ]);
+    }
+    if let Some(stripped) = trimmed.strip_prefix("- [ ]") {
+        let content = stripped.trim_start();
+        return Line::from(vec![
+            Span::styled("  ", theme.plain),
+            Span::styled(" ", theme.task_pending),
+            Span::styled(format!(" {}", content), theme.plain),
+        ]);
+    }
+
+    // Unordered list items (- item)
+    if let Some(stripped) = trimmed.strip_prefix("- ") {
+        let styled_content = style_inline_formatting(stripped, theme);
+        let mut spans = vec![Span::styled("  - ", theme.list_bullet)];
+        spans.extend(styled_content);
         return Line::from(spans);
     }
 
-    Line::from(Span::styled(
-        line.to_string(),
-        style_for_segment(theme, kind),
-    ))
+    // Ordered list items (1. item)
+    if let Some((num, rest)) = trimmed.split_once(". ")
+        && num.chars().all(|c| c.is_ascii_digit())
+    {
+        let styled_content = style_inline_formatting(rest, theme);
+        let mut spans = vec![Span::styled(format!(" {}. ", num), theme.list_bullet)];
+        spans.extend(styled_content);
+        return Line::from(spans);
+    }
+
+    // Table header detection (| Col1 | Col2 |)
+    if trimmed.starts_with('|') && trimmed.ends_with('|') {
+        // Check if it's a separator row
+        let inner = &trimmed[1..trimmed.len() - 1];
+        if inner
+            .chars()
+            .all(|c| c == '-' || c == '|' || c == ':' || c == ' ')
+        {
+            return Line::from(Span::styled(line.to_string(), theme.hr));
+        }
+        return Line::from(Span::styled(line.to_string(), theme.table_header));
+    }
+
+    // Regular text with inline formatting
+    let styled_content = style_inline_formatting(line, theme);
+    Line::from(styled_content)
+}
+
+/// Style inline markdown formatting (bold, italic, code, links)
+fn style_inline_formatting(text: &str, theme: &ThemeTokens) -> Vec<Span<'static>> {
+    let mut spans = Vec::new();
+    let mut current = String::new();
+    let mut chars = text.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        match c {
+            // Inline code `code`
+            '`' => {
+                if !current.is_empty() {
+                    spans.push(Span::styled(std::mem::take(&mut current), theme.plain));
+                }
+                let mut code = String::new();
+                while let Some(&next) = chars.peek() {
+                    if next == '`' {
+                        chars.next();
+                        break;
+                    }
+                    code.push(chars.next().unwrap());
+                }
+                spans.push(Span::styled(format!("`{}`", code), theme.code));
+            }
+            // Bold **text** or __text__
+            '*' | '_' if chars.peek() == Some(&c) => {
+                if !current.is_empty() {
+                    spans.push(Span::styled(std::mem::take(&mut current), theme.plain));
+                }
+                chars.next(); // consume second * or _
+                let mut bold = String::new();
+                while let Some(&next) = chars.peek() {
+                    if next == c {
+                        chars.next();
+                        if chars.peek() == Some(&c) {
+                            chars.next();
+                            break;
+                        }
+                        bold.push(c);
+                        continue;
+                    }
+                    bold.push(chars.next().unwrap());
+                }
+                spans.push(Span::styled(bold, theme.strong));
+            }
+            // Italic *text* or _text_
+            '*' | '_' => {
+                if !current.is_empty() {
+                    spans.push(Span::styled(std::mem::take(&mut current), theme.plain));
+                }
+                let delim = c;
+                let mut italic = String::new();
+                while let Some(&next) = chars.peek() {
+                    if next == delim {
+                        chars.next();
+                        break;
+                    }
+                    italic.push(chars.next().unwrap());
+                }
+                spans.push(Span::styled(italic, theme.emphasis));
+            }
+            // Links [text](url)
+            '[' => {
+                if !current.is_empty() {
+                    spans.push(Span::styled(std::mem::take(&mut current), theme.plain));
+                }
+                let mut link_text = String::new();
+                let mut found_close = false;
+                while let Some(&next) = chars.peek() {
+                    if next == ']' {
+                        chars.next();
+                        found_close = true;
+                        break;
+                    }
+                    link_text.push(chars.next().unwrap());
+                }
+                if found_close && chars.peek() == Some(&'(') {
+                    chars.next(); // consume (
+                    let mut url = String::new();
+                    while let Some(&next) = chars.peek() {
+                        if next == ')' {
+                            chars.next();
+                            break;
+                        }
+                        url.push(chars.next().unwrap());
+                    }
+                    spans.push(Span::styled(link_text, theme.link));
+                } else {
+                    // Not a proper link, output as-is
+                    current.push('[');
+                    current.push_str(&link_text);
+                    if found_close {
+                        current.push(']');
+                    }
+                }
+            }
+            // Strikethrough ~~text~~
+            '~' if chars.peek() == Some(&'~') => {
+                if !current.is_empty() {
+                    spans.push(Span::styled(std::mem::take(&mut current), theme.plain));
+                }
+                chars.next(); // consume second ~
+                let mut strike = String::new();
+                while let Some(&next) = chars.peek() {
+                    if next == '~' {
+                        chars.next();
+                        if chars.peek() == Some(&'~') {
+                            chars.next();
+                            break;
+                        }
+                        strike.push('~');
+                        continue;
+                    }
+                    strike.push(chars.next().unwrap());
+                }
+                spans.push(Span::styled(strike, theme.strikethrough));
+            }
+            _ => current.push(c),
+        }
+    }
+
+    if !current.is_empty() {
+        spans.push(Span::styled(current, theme.plain));
+    }
+
+    if spans.is_empty() {
+        spans.push(Span::styled(String::new(), theme.plain));
+    }
+
+    spans
 }
 
 fn code_open_before(lines: &[String], scroll: usize) -> bool {
@@ -2408,7 +2796,10 @@ fn docs_modal_rect(area: Rect) -> Rect {
     };
     let max_h = area.height.saturating_sub(4);
     let height = if max_h >= 20 {
-        area.height.saturating_mul(80).div_ceil(100).clamp(20, max_h)
+        area.height
+            .saturating_mul(80)
+            .div_ceil(100)
+            .clamp(20, max_h)
     } else {
         area.height.saturating_sub(2).max(1)
     };
@@ -2453,6 +2844,16 @@ fn clamp_scroll(scroll: usize, total: usize, height: usize) -> usize {
     }
 }
 
+/// Width needed for line number gutter: digits for max line + 1 space separator
+fn line_number_gutter_width(total_lines: usize) -> u16 {
+    let digits = if total_lines == 0 {
+        1
+    } else {
+        (total_lines as f64).log10().floor() as u16 + 1
+    };
+    digits + 2 // digits + " │"
+}
+
 fn styled_editor_lines(
     text: &str,
     scroll: usize,
@@ -2460,8 +2861,13 @@ fn styled_editor_lines(
     selection: Option<(usize, usize)>,
     width: u16,
     theme: &ThemeTokens,
+    current_line: usize,
 ) -> Vec<Line<'static>> {
     let lines = to_lines(text);
+    let total_lines = lines.len();
+    let gutter_width = line_number_gutter_width(total_lines);
+    let content_width = width.saturating_sub(gutter_width);
+
     let mut in_code = code_open_before(&lines, scroll);
     let mut line_starts = Vec::with_capacity(lines.len());
     let mut idx = 0usize;
@@ -2480,20 +2886,41 @@ fn styled_editor_lines(
         .skip(scroll)
         .take(height)
         .map(|(line_idx, line)| {
-            let base = styled_preview_line(line, width, theme, &mut in_code);
-            let Some((sel_start, sel_end)) = selection else {
-                return base;
+            // Line number
+            let is_current = line_idx == current_line;
+            let line_num_style = if is_current {
+                theme.line_number_current
+            } else {
+                theme.line_number
             };
-            let line_start = line_starts[line_idx];
-            let line_end = line_start + line.len();
-            if sel_end <= line_start || sel_start >= line_end {
-                return base;
-            }
+            let gutter_digits = gutter_width.saturating_sub(2) as usize;
+            let line_num = format!("{:>width$} │", line_idx + 1, width = gutter_digits);
+            let line_num_span = Span::styled(line_num, line_num_style);
 
-            let local_start = sel_start.saturating_sub(line_start).min(line.len());
-            let local_end = sel_end.saturating_sub(line_start).min(line.len());
-            let spans =
-                apply_selection_to_styled_spans(base.spans, local_start, local_end, selected_style);
+            // Content
+            let base = styled_preview_line(line, content_width, theme, &mut in_code);
+            let content_spans = if let Some((sel_start, sel_end)) = selection {
+                let line_start = line_starts[line_idx];
+                let line_end = line_start + line.len();
+                if sel_end <= line_start || sel_start >= line_end {
+                    base.spans
+                } else {
+                    let local_start = sel_start.saturating_sub(line_start).min(line.len());
+                    let local_end = sel_end.saturating_sub(line_start).min(line.len());
+                    apply_selection_to_styled_spans(
+                        base.spans,
+                        local_start,
+                        local_end,
+                        selected_style,
+                    )
+                }
+            } else {
+                base.spans
+            };
+
+            // Combine: line number + content
+            let mut spans = vec![line_num_span];
+            spans.extend(content_spans);
             Line::from(spans)
         })
         .collect()
@@ -2653,8 +3080,9 @@ mod tests {
     use super::{
         App, InputEvent, PaneFocus, ThemeChoice, centered_popup, clamp_scroll, code_open_before,
         cursor_rect, docs_modal_rect, mode_label, next_pressed_key, next_terminal_input,
-        onboarding_marker_path, pane_border_style, preview_title, status_line, status_style,
-        styled_editor_lines, styled_preview_line, to_lines, toggle_raw_mode,
+        onboarding_marker_path, pane_border_style, preview_title, preview_title_with_scroll,
+        scroll_indicator_bar, status_style, styled_editor_lines, styled_preview_line, to_lines,
+        toggle_raw_mode,
     };
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
@@ -2688,15 +3116,6 @@ mod tests {
         assert_eq!(clamp_scroll(0, 3, 5), 0);
         assert_eq!(clamp_scroll(1, 10, 4), 1);
         assert_eq!(clamp_scroll(20, 10, 4), 6);
-    }
-
-    #[test]
-    fn status_line_perf_suffix() {
-        assert_eq!(status_line("ok", false, 12, 3, 2), "ok");
-        assert_eq!(
-            status_line("ok", true, 12, 3, 2),
-            "ok | perf draw=12us watch_events=3 stream_events=2"
-        );
     }
 
     #[test]
@@ -4498,6 +4917,37 @@ mod tests {
     }
 
     #[test]
+    fn scroll_indicator_shows_position() {
+        // Small document that fits on screen
+        let bar = scroll_indicator_bar(10, 0, 20);
+        assert_eq!(bar, "────────");
+
+        // Document at top
+        let bar = scroll_indicator_bar(100, 0, 20);
+        assert!(bar.starts_with('━'));
+
+        // Document at bottom
+        let bar = scroll_indicator_bar(100, 80, 20);
+        assert!(bar.ends_with('━'));
+
+        // Document scrolled to middle
+        let bar = scroll_indicator_bar(100, 40, 20);
+        // Should have thumb somewhere in middle
+        assert!(bar.contains('━'));
+    }
+
+    #[test]
+    fn preview_title_with_scroll_includes_bar() {
+        let title = preview_title_with_scroll(0, None, 100, 0, 20);
+        assert!(title.starts_with("Preview "));
+        assert!(title.contains('━') || title.contains('─'));
+
+        // Small doc should not have indicator
+        let title = preview_title_with_scroll(0, None, 10, 0, 20);
+        assert_eq!(title, "Preview");
+    }
+
+    #[test]
     fn helper_preview_line_code_and_list_paths() {
         let theme = build_theme(ThemeChoice::Default, false);
         let mut in_code = false;
@@ -4514,11 +4964,11 @@ mod tests {
         assert_eq!(close.spans[0].content, "```");
 
         let bullet = styled_preview_line("- item", 80, &theme, &mut in_code);
-        assert_eq!(bullet.spans[0].content, "- ");
+        assert_eq!(bullet.spans[0].content, "  - ");
         assert_eq!(bullet.spans[1].content, "item");
 
         let ordered = styled_preview_line("12. item", 80, &theme, &mut in_code);
-        assert_eq!(ordered.spans[0].content, "12. ");
+        assert_eq!(ordered.spans[0].content, " 12. ");
         assert_eq!(ordered.spans[1].content, "item");
 
         let malformed = styled_preview_line("xx. item", 80, &theme, &mut in_code);
@@ -4574,14 +5024,17 @@ mod tests {
     #[test]
     fn styled_editor_lines_marks_selected_span() {
         let theme = build_theme(ThemeChoice::Default, false);
-        let rendered = styled_editor_lines("hello", 0, 1, Some((1, 4)), 80, &theme);
+        let rendered = styled_editor_lines("hello", 0, 1, Some((1, 4)), 80, &theme, 0);
         assert_eq!(rendered.len(), 1);
-        assert_eq!(rendered[0].spans.len(), 3);
-        assert_eq!(rendered[0].spans[0].content.as_ref(), "h");
-        assert_eq!(rendered[0].spans[1].content.as_ref(), "ell");
-        assert_eq!(rendered[0].spans[2].content.as_ref(), "o");
+        // First span is line number, then content spans
+        assert!(rendered[0].spans.len() >= 3);
+        // Find the content spans (after line number)
+        let content_start = 1; // line number is first span
+        assert_eq!(rendered[0].spans[content_start].content.as_ref(), "h");
+        assert_eq!(rendered[0].spans[content_start + 1].content.as_ref(), "ell");
+        assert_eq!(rendered[0].spans[content_start + 2].content.as_ref(), "o");
         assert!(
-            rendered[0].spans[1]
+            rendered[0].spans[content_start + 1]
                 .style
                 .add_modifier
                 .contains(Modifier::REVERSED)
@@ -4591,8 +5044,21 @@ mod tests {
     #[test]
     fn styled_editor_lines_uses_semantic_styles() {
         let theme = build_theme(ThemeChoice::Default, false);
-        let rendered = styled_editor_lines("# Heading", 0, 1, None, 80, &theme);
-        assert_eq!(rendered[0].spans[0].style.fg, theme.heading.fg);
+        let rendered = styled_editor_lines("# Heading", 0, 1, None, 80, &theme, 0);
+        // First span is line number, second span (index 1) is heading content
+        assert_eq!(rendered[0].spans[1].style.fg, theme.heading.fg);
+    }
+
+    #[test]
+    fn styled_editor_lines_shows_current_line_highlight() {
+        let theme = build_theme(ThemeChoice::Default, false);
+        let rendered = styled_editor_lines("line1\nline2\nline3", 0, 3, None, 80, &theme, 1);
+        // Line 0 (not current)
+        assert_eq!(rendered[0].spans[0].style.fg, theme.line_number.fg);
+        // Line 1 (current)
+        assert_eq!(rendered[1].spans[0].style.fg, theme.line_number_current.fg);
+        // Line 2 (not current)
+        assert_eq!(rendered[2].spans[0].style.fg, theme.line_number.fg);
     }
 
     #[test]

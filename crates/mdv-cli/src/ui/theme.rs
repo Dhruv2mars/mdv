@@ -4,11 +4,19 @@ use ratatui::style::{Color, Modifier, Style};
 use crate::app::state::ThemeChoice;
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct ThemeTokens {
     pub top_bar: Style,
     pub status_ok: Style,
     pub status_warn: Style,
     pub status_error: Style,
+    pub status_bg: Style,
+    pub status_mode: Style,
+    pub status_position: Style,
+    pub status_file: Style,
+    pub status_dirty: Style,
+    pub status_clean: Style,
+    pub status_separator: Style,
     pub pane_border: Style,
     pub pane_focus: Style,
     pub help: Style,
@@ -21,6 +29,15 @@ pub struct ThemeTokens {
     pub conflict_local: Style,
     pub conflict_external: Style,
     pub plain: Style,
+    pub line_number: Style,
+    pub line_number_current: Style,
+    pub scroll_indicator: Style,
+    pub emphasis: Style,
+    pub strong: Style,
+    pub strikethrough: Style,
+    pub hr: Style,
+    pub task_done: Style,
+    pub task_pending: Style,
 }
 
 pub fn build_theme(choice: ThemeChoice, no_color: bool) -> ThemeTokens {
@@ -51,31 +68,83 @@ pub fn style_for_segment(tokens: &ThemeTokens, kind: SegmentKind) -> Style {
 fn default_theme() -> ThemeTokens {
     ThemeTokens {
         top_bar: Style::default()
-            .fg(Color::Cyan)
+            .fg(Color::Rgb(220, 220, 220))
+            .bg(Color::Rgb(40, 44, 52))
             .add_modifier(Modifier::BOLD),
-        status_ok: Style::default().fg(Color::Green),
-        status_warn: Style::default().fg(Color::Yellow),
-        status_error: Style::default().fg(Color::Red),
-        pane_border: Style::default().fg(Color::DarkGray),
+        status_ok: Style::default().fg(Color::Rgb(152, 195, 121)),
+        status_warn: Style::default().fg(Color::Rgb(229, 192, 123)),
+        status_error: Style::default().fg(Color::Rgb(224, 108, 117)),
+        status_bg: Style::default()
+            .fg(Color::Rgb(171, 178, 191))
+            .bg(Color::Rgb(40, 44, 52)),
+        status_mode: Style::default()
+            .fg(Color::Rgb(40, 44, 52))
+            .bg(Color::Rgb(97, 175, 239))
+            .add_modifier(Modifier::BOLD),
+        status_position: Style::default()
+            .fg(Color::Rgb(40, 44, 52))
+            .bg(Color::Rgb(198, 120, 221))
+            .add_modifier(Modifier::BOLD),
+        status_file: Style::default()
+            .fg(Color::Rgb(220, 220, 220))
+            .bg(Color::Rgb(55, 59, 67)),
+        status_dirty: Style::default()
+            .fg(Color::Rgb(229, 192, 123))
+            .bg(Color::Rgb(55, 59, 67))
+            .add_modifier(Modifier::BOLD),
+        status_clean: Style::default()
+            .fg(Color::Rgb(152, 195, 121))
+            .bg(Color::Rgb(55, 59, 67)),
+        status_separator: Style::default()
+            .fg(Color::Rgb(92, 99, 112))
+            .bg(Color::Rgb(40, 44, 52)),
+        pane_border: Style::default().fg(Color::Rgb(92, 99, 112)),
         pane_focus: Style::default()
-            .fg(Color::LightBlue)
+            .fg(Color::Rgb(97, 175, 239))
             .add_modifier(Modifier::BOLD),
-        help: Style::default().fg(Color::White),
+        help: Style::default().fg(Color::Rgb(171, 178, 191)),
         heading: Style::default()
-            .fg(Color::Cyan)
+            .fg(Color::Rgb(224, 108, 117))
             .add_modifier(Modifier::BOLD),
-        list_bullet: Style::default().fg(Color::Magenta),
+        list_bullet: Style::default().fg(Color::Rgb(198, 120, 221)),
         link: Style::default()
-            .fg(Color::LightBlue)
+            .fg(Color::Rgb(97, 175, 239))
             .add_modifier(Modifier::UNDERLINED),
-        code: Style::default().fg(Color::LightYellow),
-        quote: Style::default().fg(Color::Gray),
+        code: Style::default()
+            .fg(Color::Rgb(229, 192, 123))
+            .bg(Color::Rgb(40, 44, 52)),
+        quote: Style::default()
+            .fg(Color::Rgb(92, 99, 112))
+            .add_modifier(Modifier::ITALIC),
         table_header: Style::default()
-            .fg(Color::LightCyan)
+            .fg(Color::Rgb(86, 182, 194))
             .add_modifier(Modifier::BOLD),
-        conflict_local: Style::default().fg(Color::LightMagenta),
-        conflict_external: Style::default().fg(Color::LightGreen),
-        plain: Style::default().fg(Color::White),
+        conflict_local: Style::default()
+            .fg(Color::Rgb(198, 120, 221))
+            .add_modifier(Modifier::BOLD),
+        conflict_external: Style::default()
+            .fg(Color::Rgb(152, 195, 121))
+            .add_modifier(Modifier::BOLD),
+        plain: Style::default().fg(Color::Rgb(171, 178, 191)),
+        line_number: Style::default().fg(Color::Rgb(76, 82, 99)),
+        line_number_current: Style::default()
+            .fg(Color::Rgb(229, 192, 123))
+            .add_modifier(Modifier::BOLD),
+        scroll_indicator: Style::default()
+            .fg(Color::Rgb(97, 175, 239))
+            .add_modifier(Modifier::BOLD),
+        emphasis: Style::default()
+            .fg(Color::Rgb(171, 178, 191))
+            .add_modifier(Modifier::ITALIC),
+        strong: Style::default()
+            .fg(Color::Rgb(220, 220, 220))
+            .add_modifier(Modifier::BOLD),
+        strikethrough: Style::default()
+            .fg(Color::Rgb(92, 99, 112))
+            .add_modifier(Modifier::CROSSED_OUT),
+        hr: Style::default().fg(Color::Rgb(92, 99, 112)),
+        task_done: Style::default().fg(Color::Rgb(152, 195, 121)),
+        task_pending: Style::default().fg(Color::Rgb(229, 192, 123)),
     }
 }
 
@@ -88,6 +157,22 @@ fn high_contrast_theme() -> ThemeTokens {
         status_ok: Style::default().fg(Color::Green).bg(Color::Black),
         status_warn: Style::default().fg(Color::Yellow).bg(Color::Black),
         status_error: Style::default().fg(Color::Red).bg(Color::Black),
+        status_bg: Style::default().fg(Color::White).bg(Color::Black),
+        status_mode: Style::default()
+            .fg(Color::Black)
+            .bg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
+        status_position: Style::default()
+            .fg(Color::Black)
+            .bg(Color::Magenta)
+            .add_modifier(Modifier::BOLD),
+        status_file: Style::default().fg(Color::White).bg(Color::DarkGray),
+        status_dirty: Style::default()
+            .fg(Color::Yellow)
+            .bg(Color::DarkGray)
+            .add_modifier(Modifier::BOLD),
+        status_clean: Style::default().fg(Color::Green).bg(Color::DarkGray),
+        status_separator: Style::default().fg(Color::DarkGray).bg(Color::Black),
         pane_border: Style::default().fg(Color::White),
         pane_focus: Style::default()
             .fg(Color::Yellow)
@@ -114,6 +199,25 @@ fn high_contrast_theme() -> ThemeTokens {
             .fg(Color::Green)
             .add_modifier(Modifier::BOLD),
         plain: Style::default().fg(Color::White),
+        line_number: Style::default().fg(Color::DarkGray),
+        line_number_current: Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD),
+        scroll_indicator: Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD),
+        emphasis: Style::default()
+            .fg(Color::White)
+            .add_modifier(Modifier::ITALIC),
+        strong: Style::default()
+            .fg(Color::White)
+            .add_modifier(Modifier::BOLD),
+        strikethrough: Style::default()
+            .fg(Color::DarkGray)
+            .add_modifier(Modifier::CROSSED_OUT),
+        hr: Style::default().fg(Color::White),
+        task_done: Style::default().fg(Color::Green),
+        task_pending: Style::default().fg(Color::Yellow),
     }
 }
 
@@ -124,6 +228,15 @@ fn monochrome_theme() -> ThemeTokens {
         status_ok: base,
         status_warn: base,
         status_error: base,
+        status_bg: base,
+        status_mode: base
+            .add_modifier(Modifier::BOLD)
+            .add_modifier(Modifier::REVERSED),
+        status_position: base.add_modifier(Modifier::BOLD),
+        status_file: base,
+        status_dirty: base.add_modifier(Modifier::BOLD),
+        status_clean: base,
+        status_separator: base,
         pane_border: base,
         pane_focus: base.add_modifier(Modifier::BOLD),
         help: base,
@@ -136,6 +249,15 @@ fn monochrome_theme() -> ThemeTokens {
         conflict_local: base.add_modifier(Modifier::BOLD),
         conflict_external: base.add_modifier(Modifier::BOLD),
         plain: base,
+        line_number: base,
+        line_number_current: base.add_modifier(Modifier::BOLD),
+        scroll_indicator: base.add_modifier(Modifier::BOLD),
+        emphasis: base.add_modifier(Modifier::ITALIC),
+        strong: base.add_modifier(Modifier::BOLD),
+        strikethrough: base.add_modifier(Modifier::CROSSED_OUT),
+        hr: base,
+        task_done: base,
+        task_pending: base,
     }
 }
 
@@ -196,12 +318,34 @@ mod tests {
 
         for kind in kinds {
             let style = style_for_segment(&theme, kind);
-            match kind {
-                SegmentKind::Heading => assert_eq!(style.fg, Some(Color::Cyan)),
-                SegmentKind::Link => assert_eq!(style.fg, Some(Color::LightBlue)),
-                SegmentKind::Code => assert_eq!(style.fg, Some(Color::LightYellow)),
-                _ => assert!(style.fg.is_some() || !style.add_modifier.is_empty()),
-            }
+            // All segment styles should have a color set
+            assert!(style.fg.is_some() || !style.add_modifier.is_empty());
         }
+    }
+
+    #[test]
+    fn default_theme_has_line_numbers_styled() {
+        let theme = build_theme(ThemeChoice::Default, false);
+        assert!(theme.line_number.fg.is_some());
+        assert!(theme.line_number_current.fg.is_some());
+        assert!(
+            theme
+                .line_number_current
+                .add_modifier
+                .contains(Modifier::BOLD)
+        );
+    }
+
+    #[test]
+    fn monochrome_theme_uses_modifiers_only() {
+        let theme = build_theme(ThemeChoice::Default, true);
+        assert!(theme.emphasis.add_modifier.contains(Modifier::ITALIC));
+        assert!(theme.strong.add_modifier.contains(Modifier::BOLD));
+        assert!(
+            theme
+                .strikethrough
+                .add_modifier
+                .contains(Modifier::CROSSED_OUT)
+        );
     }
 }

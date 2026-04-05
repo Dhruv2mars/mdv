@@ -231,9 +231,7 @@ mod tests {
     use crate::app::ThemeChoice;
     use crate::ui::theme::build_theme;
 
-    use super::{
-        onboarding_catalog, render_section, section, section_count, user_docs_catalog,
-    };
+    use super::{onboarding_catalog, render_section, section, section_count, user_docs_catalog};
 
     #[test]
     fn user_catalog_has_expected_sections() {
