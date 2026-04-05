@@ -1,0 +1,50 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "76a88da6d0ec",
+  "session_id": "019d5de7-3ecc-7c63-8b76-70341c93d9de",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-05T15:13:27.935635Z",
+  "branch": "docs/beginner-first-onboarding",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "README.md",
+    "packages/cli/README.md",
+    "crates/mdv-cli/src/ui/docs/01-welcome.md",
+    "crates/mdv-cli/src/ui/docs/02-quickstart.md",
+    "crates/mdv-cli/src/ui/docs/03-modes.md",
+    "crates/mdv-cli/src/ui/docs/04-editing.md",
+    "crates/mdv-cli/src/ui/docs/05-selection.md",
+    "crates/mdv-cli/src/ui/docs/06-search.md",
+    "crates/mdv-cli/src/ui/docs/07-mouse.md",
+    "crates/mdv-cli/src/ui/docs/08-conflicts.md",
+    "crates/mdv-cli/src/ui/docs/09-cli.md",
+    "crates/mdv-cli/src/ui/docs/10-troubleshooting.md",
+    "crates/mdv-cli/src/ui/docs/11-settings.md",
+    "crates/mdv-cli/src/ui/docs.rs",
+    "crates/mdv-cli/src/app/mod.rs"
+  ],
+  "agent": "Codex",
+  "model": "gpt-5.4",
+  "turn_id": "d62e7eb2dbb9",
+  "checkpoint_transcript_start": 1283,
+  "transcript_lines_at_start": 1283,
+  "token_usage": {
+    "input_tokens": 10397807,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 10117120,
+    "output_tokens": 18485,
+    "api_call_count": 55
+  },
+  "session_metrics": {
+    "turn_count": 3
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-04-05T15:13:26.97912Z",
+    "agent_lines": 290,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 290,
+    "agent_percentage": 100
+  }
+}
